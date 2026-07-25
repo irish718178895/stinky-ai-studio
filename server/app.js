@@ -1,0 +1,1094 @@
+import express from "express";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { generateStoryboard } from "../modules/storyboard.js";
+import {
+  PORT, COMFY_URL, CHECKPOINT, OLLAMA_URL, OLLAMA_MODEL,
+  PROJECT_FILES_DIR, PUBLIC_DIR, PIPER_COMMAND, PIPER_MODEL, RESOLUTIONS
+} from "./config.js";
+import { ensureStorage, readProjects, writeProjects, publicProject } from "./services/project-store.js";
+
+const app = express();
+const renderJobs = new Map();
+const imageJobs = new Map();
+
+app.use(express.json({ limit: "40mb" }));
+app.use(express.static(PUBLIC_DIR));
+app.use("/generated", express.static(PROJECT_FILES_DIR));
+
+function makeWorkflow({ prompt, negativePrompt, width, height, steps, cfg, seed }) {
+  return {
+    "1": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: CHECKPOINT } },
+    "2": { class_type: "CLIPTextEncode", inputs: { text: prompt, clip: ["1", 1] } },
+    "3": { class_type: "CLIPTextEncode", inputs: { text: negativePrompt, clip: ["1", 1] } },
+    "4": { class_type: "EmptyLatentImage", inputs: { width, height, batch_size: 1 } },
+    "5": {
+      class_type: "KSampler",
+      inputs: {
+        seed,
+        steps,
+        cfg,
+        sampler_name: "euler",
+        scheduler: "normal",
+        denoise: 1,
+        model: ["1", 0],
+        positive: ["2", 0],
+        negative: ["3", 0],
+        latent_image: ["4", 0]
+      }
+    },
+    "6": { class_type: "VAEDecode", inputs: { samples: ["5", 0], vae: ["1", 2] } },
+    "7": {
+      class_type: "SaveImage",
+      inputs: { filename_prefix: "Stinky_AI_Studio", images: ["6", 0] }
+    }
+  };
+}
+
+async function comfyFetch(route, options = {}) {
+  const response = await fetch(`${COMFY_URL}${route}`, options);
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`ComfyUI ${response.status}: ${body || response.statusText}`);
+  }
+  return response;
+}
+
+async function waitForResult(promptId, timeoutMs = 10 * 60 * 1000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const response = await comfyFetch(`/history/${encodeURIComponent(promptId)}`);
+    const history = await response.json();
+    const job = history[promptId];
+
+    if (job?.status?.status_str === "error") {
+      throw new Error(`ComfyUI generation failed: ${JSON.stringify(job.status.messages || [])}`);
+    }
+
+    const images = [];
+    for (const output of Object.values(job?.outputs || {})) {
+      for (const image of output.images || []) images.push(image);
+    }
+    if (images.length) return images;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  throw new Error("Timed out waiting for ComfyUI to finish.");
+}
+
+async function copyComfyImage(image, projectId, imageId) {
+  const query = new URLSearchParams({
+    filename: image.filename,
+    subfolder: image.subfolder || "",
+    type: image.type || "output"
+  });
+  const response = await comfyFetch(`/view?${query}`);
+  const extension = path.extname(image.filename) || ".png";
+  const projectDir = path.join(PROJECT_FILES_DIR, projectId);
+  await fs.mkdir(projectDir, { recursive: true });
+  const storedName = `${imageId}${extension}`;
+  await fs.writeFile(path.join(projectDir, storedName), Buffer.from(await response.arrayBuffer()));
+  return `/generated/${encodeURIComponent(projectId)}/${encodeURIComponent(storedName)}`;
+}
+
+
+function runCommand(command, args, onProgress = null) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => {
+      const text = chunk.toString();
+      stdout += text;
+      if (onProgress) onProgress(text);
+    });
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`${command} exited with code ${code}: ${stderr.slice(-6000)}`));
+    });
+  });
+}
+
+function runCommandWithInput(command, args, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk.toString(); });
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`${command} exited with code ${code}: ${stderr.slice(-6000)}`));
+    });
+    child.stdin.end(input);
+  });
+}
+
+async function requirePiper() {
+  try { await fs.access(PIPER_COMMAND); }
+  catch { throw new Error(`Piper is not installed at ${PIPER_COMMAND}. Run the v0.9 install commands.`); }
+  try { await fs.access(PIPER_MODEL); }
+  catch { throw new Error(`Piper voice model is missing at ${PIPER_MODEL}. Download the model and its JSON file.`); }
+}
+
+async function synthesizeSceneVoice(project, scene, lengthScale = 1) {
+  const narration = String(scene.narration || "").trim();
+  if (!narration) throw new Error(`Scene “${scene.title}” has no narration.`);
+  await requirePiper();
+  const voicesDir = path.join(PROJECT_FILES_DIR, project.id, "voices");
+  await fs.mkdir(voicesDir, { recursive: true });
+  const filename = `${scene.id}.wav`;
+  const outputPath = path.join(voicesDir, filename);
+  const scale = Math.min(2, Math.max(0.5, Number(lengthScale) || 1));
+  await runCommandWithInput(PIPER_COMMAND, ["--model", PIPER_MODEL, "--output_file", outputPath, "--length_scale", String(scale)], `${narration}
+`);
+  scene.voiceUrl = `/generated/${encodeURIComponent(project.id)}/voices/${encodeURIComponent(filename)}`;
+  scene.voiceModel = path.basename(PIPER_MODEL);
+  scene.voiceLengthScale = scale;
+  scene.voiceGeneratedAt = new Date().toISOString();
+  scene.updatedAt = scene.voiceGeneratedAt;
+  project.updatedAt = scene.voiceGeneratedAt;
+  return scene.voiceUrl;
+}
+
+async function requireFfmpeg() {
+  try { await runCommand("ffmpeg", ["-version"]); }
+  catch { throw new Error("FFmpeg is not installed or not in PATH. Install it with: sudo apt install ffmpeg"); }
+}
+
+async function nvencAvailable() {
+  try {
+    const result = await runCommand("ffmpeg", ["-hide_banner", "-encoders"]);
+    return result.stdout.includes("h264_nvenc");
+  } catch { return false; }
+}
+
+function normalizeRenderSettings(body = {}) {
+  const resolution = RESOLUTIONS[body.resolution] ? body.resolution : "720p";
+  const fps = [24, 30, 60].includes(Number(body.fps)) ? Number(body.fps) : 30;
+  const transition = ["cut", "crossfade", "dip-black"].includes(body.transition) ? body.transition : "crossfade";
+  const transitionDuration = Math.min(1.5, Math.max(0.25, Number(body.transitionDuration) || 0.6));
+  const encoder = ["auto", "cpu", "nvidia"].includes(body.encoder) ? body.encoder : "auto";
+  const includeNarration = body.includeNarration !== false;
+  const includeMusic = body.includeMusic === true;
+  const musicTrackId = typeof body.musicTrackId === "string" ? body.musicTrackId : null;
+  const musicVolume = Math.min(1, Math.max(0, Number(body.musicVolume) || 0.22));
+  const duckMusic = body.duckMusic !== false;
+  const musicFade = Math.min(5, Math.max(0, Number(body.musicFade) || 1.5));
+  return { resolution, fps, transition, transitionDuration, encoder, includeNarration, includeMusic, musicTrackId, musicVolume, duckMusic, musicFade, ...RESOLUTIONS[resolution] };
+}
+
+function easeExpression() {
+  // Smoothstep: t²(3-2t), giving gentle acceleration and deceleration.
+  return "((on/MAX)*(on/MAX)*(3-2*(on/MAX)))";
+}
+
+function sceneFilter(scene, frames, width, height, fps) {
+  const max = Math.max(1, frames - 1);
+  const eased = easeExpression().replaceAll("MAX", String(max));
+  const panWidth = Math.round(width * 1.16);
+  const standardScale = `scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos`;
+  const panScale = `scale=${panWidth}:${height}:force_original_aspect_ratio=increase:flags=lanczos`;
+
+  switch (scene.cameraMovement) {
+    case "zoom-out":
+      return `${standardScale},zoompan=z='max(1.0,1.14-0.14*${eased})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+    case "pan-left":
+      return `${panScale},zoompan=z=1:x='(iw-ow)*(1-${eased})':y='(ih-oh)/2':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+    case "pan-right":
+      return `${panScale},zoompan=z=1:x='(iw-ow)*${eased}':y='(ih-oh)/2':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+    case "none":
+      return `${standardScale},zoompan=z=1:x='(iw-ow)/2':y='(ih-oh)/2':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+    case "zoom-in":
+    default:
+      return `${standardScale},zoompan=z='min(1.14,1+0.14*${eased})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+  }
+}
+
+function parseProgress(text, durationSeconds, callback) {
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("out_time_ms=")) continue;
+    const microseconds = Number(line.slice("out_time_ms=".length));
+    if (Number.isFinite(microseconds)) callback(Math.min(1, microseconds / 1_000_000 / Math.max(0.1, durationSeconds)));
+  }
+}
+
+async function chooseEncoder(requested) {
+  const hasNvenc = await nvencAvailable();
+  if (requested === "nvidia" && !hasNvenc) throw new Error("NVIDIA NVENC was selected, but FFmpeg does not report h264_nvenc support.");
+  if (requested === "nvidia" || (requested === "auto" && hasNvenc)) {
+    return { name: "h264_nvenc", args: ["-preset", "p5", "-cq", "21"], label: "NVIDIA NVENC" };
+  }
+  return { name: "libx264", args: ["-preset", "medium", "-crf", "19"], label: "CPU / libx264" };
+}
+
+
+function safeMusicExtension(filename, mimeType) {
+  const extension = path.extname(filename || "").toLowerCase();
+  const allowed = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"]);
+  if (allowed.has(extension)) return extension;
+  if (mimeType === "audio/mpeg") return ".mp3";
+  if (mimeType === "audio/wav" || mimeType === "audio/x-wav") return ".wav";
+  if (mimeType === "audio/mp4") return ".m4a";
+  if (mimeType === "audio/ogg") return ".ogg";
+  if (mimeType === "audio/flac") return ".flac";
+  throw new Error("Unsupported music format. Use MP3, WAV, M4A, AAC, OGG, or FLAC.");
+}
+
+async function mixBackgroundMusic({ baseVideoPath, outputPath, musicPath, duration, settings, update }) {
+  const fade = Math.min(settings.musicFade, Math.max(0, duration / 3));
+  const fadeOutStart = Math.max(0, duration - fade);
+  const musicPrep = [
+    `volume=${settings.musicVolume}`,
+    fade > 0 ? `afade=t=in:st=0:d=${fade}` : null,
+    fade > 0 ? `afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fade}` : null,
+    `atrim=0:${duration}`,
+    "asetpts=N/SR/TB"
+  ].filter(Boolean).join(",");
+
+  let filter;
+  if (settings.duckMusic && settings.includeNarration) {
+    filter = `[1:a]${musicPrep}[music];[music][0:a]sidechaincompress=threshold=0.025:ratio=10:attack=20:release=650[ducked];[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`;
+  } else {
+    filter = `[1:a]${musicPrep}[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`;
+  }
+
+  update({ stage: "Mixing background music", progress: 96 });
+  await runCommand("ffmpeg", [
+    "-y", "-i", baseVideoPath, "-stream_loop", "-1", "-i", musicPath,
+    "-filter_complex", filter,
+    "-map", "0:v:0", "-map", "[aout]",
+    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+    "-t", String(duration), "-movflags", "+faststart", outputPath
+  ]);
+}
+
+async function renderProjectVideo(project, settings, update) {
+  await requireFfmpeg();
+  const scenes = [...(project.scenes || [])].sort((a, b) => a.order - b.order);
+  if (!scenes.length) throw new Error("Add at least one scene before rendering.");
+  const resolved = scenes.map(scene => ({ scene, image: project.images.find(i => i.id === scene.imageId) }));
+  if (resolved.some(item => !item.image)) throw new Error("Every scene must have a selected image before rendering.");
+
+  const encoder = await chooseEncoder(settings.encoder);
+  const projectDir = path.join(PROJECT_FILES_DIR, project.id);
+  const renderId = crypto.randomUUID();
+  const workDir = path.join(projectDir, `.render-${renderId}`);
+  const videosDir = path.join(projectDir, "videos");
+  await fs.mkdir(workDir, { recursive: true });
+  await fs.mkdir(videosDir, { recursive: true });
+  const clips = [];
+  const durations = [];
+
+  try {
+    for (let i = 0; i < resolved.length; i++) {
+      const { scene, image } = resolved[i];
+      update({ stage: `Rendering scene ${i + 1} of ${resolved.length}`, scene: i + 1 });
+      const inputPath = path.join(projectDir, path.basename(new URL(image.url, "http://local").pathname));
+      const clip = path.join(workDir, `scene-${String(i + 1).padStart(3, "0")}.mp4`);
+      const duration = Math.max(1, Number(scene.duration) || 5);
+      const frames = Math.max(1, Math.round(duration * settings.fps));
+      const voicePath = settings.includeNarration && scene.voiceUrl
+        ? path.join(projectDir, "voices", path.basename(new URL(scene.voiceUrl, "http://local").pathname))
+        : null;
+      const audioInput = voicePath
+        ? ["-i", voicePath]
+        : ["-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono"];
+      const args = ["-y", "-loop", "1", "-i", inputPath, ...audioInput,
+        "-vf", sceneFilter(scene, frames, settings.width, settings.height, settings.fps),
+        "-af", `apad,atrim=0:${duration}`,
+        "-frames:v", String(frames), "-t", String(duration), "-r", String(settings.fps),
+        "-map", "0:v:0", "-map", "1:a:0", "-c:v", encoder.name, ...encoder.args,
+        "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", clip];
+      await runCommand("ffmpeg", args, text => parseProgress(text, duration, ratio => {
+        update({ progress: Math.round(((i + ratio) / (resolved.length + 1)) * 100) });
+      }));
+      clips.push(clip);
+      durations.push(duration);
+    }
+
+    const filename = `stinky-video-${new Date().toISOString().replace(/[:.]/g, "-")}.mp4`;
+    const outputPath = path.join(videosDir, filename);
+    const baseOutputPath = settings.includeMusic ? path.join(workDir, "video-with-narration.mp4") : outputPath;
+    update({ stage: "Joining scenes and applying transitions", progress: Math.round(resolved.length / (resolved.length + 1) * 100) });
+
+    if (settings.transition === "cut" || clips.length === 1) {
+      const concatFile = path.join(workDir, "concat.txt");
+      await fs.writeFile(concatFile, clips.map(f => `file '${f.replaceAll("'", "'\\''")}'`).join("\n") + "\n");
+      await runCommand("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concatFile, "-c", "copy", "-movflags", "+faststart", baseOutputPath]);
+    } else {
+      const td = Math.min(settings.transitionDuration, ...durations.map(d => Math.max(0.25, d / 3)));
+      const inputs = clips.flatMap(clip => ["-i", clip]);
+      let filters = "";
+      let previousVideo = "0:v";
+      let previousAudio = "0:a";
+      let cumulative = durations[0];
+      for (let i = 1; i < clips.length; i++) {
+        const videoOutput = i === clips.length - 1 ? "vout" : `v${i}`;
+        const audioOutput = i === clips.length - 1 ? "aout" : `a${i}`;
+        const transitionName = settings.transition === "dip-black" ? "fadeblack" : "fade";
+        const offset = Math.max(0, cumulative - td * i);
+        filters += `[${previousVideo}][${i}:v]xfade=transition=${transitionName}:duration=${td}:offset=${offset.toFixed(3)}[${videoOutput}];`;
+        filters += `[${previousAudio}][${i}:a]acrossfade=d=${td}:c1=tri:c2=tri[${audioOutput}];`;
+        previousVideo = videoOutput;
+        previousAudio = audioOutput;
+        cumulative += durations[i];
+      }
+      filters = filters.replace(/;$/, "");
+      const finalDuration = durations.reduce((a, b) => a + b, 0) - td * (clips.length - 1);
+      await runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters, "-map", "[vout]", "-map", "[aout]", "-c:v", encoder.name, ...encoder.args, "-c:a", "aac", "-b:a", "160k", "-pix_fmt", "yuv420p", "-r", String(settings.fps), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", baseOutputPath], text => parseProgress(text, finalDuration, ratio => update({ progress: Math.round(((resolved.length + ratio) / (resolved.length + 1)) * 100) })));
+    }
+
+    const duration = durations.reduce((a, b) => a + b, 0) - (settings.transition === "cut" ? 0 : settings.transitionDuration * Math.max(0, clips.length - 1));
+    let musicRecord = null;
+    if (settings.includeMusic) {
+      musicRecord = (project.musicTracks || []).find(track => track.id === settings.musicTrackId);
+      if (!musicRecord) throw new Error("Select a background music track before rendering.");
+      const musicPath = path.join(projectDir, "music", path.basename(new URL(musicRecord.url, "http://local").pathname));
+      await mixBackgroundMusic({ baseVideoPath: baseOutputPath, outputPath, musicPath, duration, settings, update });
+    }
+    const stat = await fs.stat(outputPath);
+    const record = {
+      id: renderId, filename,
+      url: `/generated/${encodeURIComponent(project.id)}/videos/${encodeURIComponent(filename)}`,
+      sceneCount: scenes.length, duration: Math.max(0, Number(duration.toFixed(2))),
+      width: settings.width, height: settings.height, fps: settings.fps,
+      resolution: settings.resolution, transition: settings.transition,
+      encoder: encoder.label, narration: settings.includeNarration,
+      music: musicRecord ? { id: musicRecord.id, name: musicRecord.name, volume: settings.musicVolume, ducking: settings.duckMusic } : null,
+      fileSize: stat.size,
+      createdAt: new Date().toISOString()
+    };
+    project.videos = Array.isArray(project.videos) ? project.videos : [];
+    project.videos.unshift(record);
+    project.updatedAt = record.createdAt;
+    update({ progress: 100, stage: "Complete" });
+    return record;
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true });
+  }
+}
+
+app.get("/api/health", async (_req, res) => {
+  try {
+    const response = await comfyFetch("/system_stats");
+    res.json({ ok: true, comfyUrl: COMFY_URL, checkpoint: CHECKPOINT, stats: await response.json() });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/piper/health", async (_req, res) => {
+  try {
+    await requirePiper();
+    res.json({ ok: true, command: PIPER_COMMAND, model: path.basename(PIPER_MODEL) });
+  } catch (error) {
+    res.status(503).json({ ok: false, command: PIPER_COMMAND, model: PIPER_MODEL, error: error.message });
+  }
+});
+
+app.post("/api/projects/:projectId/scenes/:sceneId/voice", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const scene = project.scenes.find(item => item.id === req.params.sceneId);
+    if (!scene) return res.status(404).json({ error: "Scene not found." });
+    await synthesizeSceneVoice(project, scene, req.body.lengthScale);
+    await writeProjects(projects);
+    res.json(scene);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/projects/:projectId/generate-scene-voices", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const regenerate = Boolean(req.body.regenerate);
+    const scenes = [...project.scenes].sort((a, b) => a.order - b.order)
+      .filter(scene => String(scene.narration || "").trim() && (regenerate || !scene.voiceUrl));
+    const results = [];
+    for (const scene of scenes) {
+      try {
+        await synthesizeSceneVoice(project, scene, req.body.lengthScale);
+        results.push({ sceneId: scene.id, title: scene.title, ok: true, voiceUrl: scene.voiceUrl });
+      } catch (error) {
+        results.push({ sceneId: scene.id, title: scene.title, ok: false, error: error.message });
+      }
+    }
+    await writeProjects(projects);
+    res.json({ generated: results.filter(item => item.ok).length, total: results.length, results });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+app.post("/api/projects/:projectId/music", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const filename = String(req.body.filename || "music").slice(0, 180);
+    const mimeType = String(req.body.mimeType || "");
+    const encoded = String(req.body.dataBase64 || "");
+    if (!encoded) return res.status(400).json({ error: "No audio data was supplied." });
+    const buffer = Buffer.from(encoded, "base64");
+    if (!buffer.length || buffer.length > 30 * 1024 * 1024) return res.status(400).json({ error: "Music file must be between 1 byte and 30 MB." });
+    const extension = safeMusicExtension(filename, mimeType);
+    const id = crypto.randomUUID();
+    const musicDir = path.join(PROJECT_FILES_DIR, project.id, "music");
+    await fs.mkdir(musicDir, { recursive: true });
+    const storedName = `${id}${extension}`;
+    await fs.writeFile(path.join(musicDir, storedName), buffer);
+    const now = new Date().toISOString();
+    const record = { id, name: path.basename(filename), mimeType, fileSize: buffer.length, url: `/generated/${encodeURIComponent(project.id)}/music/${encodeURIComponent(storedName)}`, createdAt: now };
+    project.musicTracks = Array.isArray(project.musicTracks) ? project.musicTracks : [];
+    project.musicTracks.unshift(record);
+    project.updatedAt = now;
+    await writeProjects(projects);
+    res.status(201).json(record);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/projects/:projectId/music/:musicId", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const index = (project.musicTracks || []).findIndex(item => item.id === req.params.musicId);
+    if (index < 0) return res.status(404).json({ error: "Music track not found." });
+    const [track] = project.musicTracks.splice(index, 1);
+    const storedPath = path.join(PROJECT_FILES_DIR, project.id, "music", path.basename(new URL(track.url, "http://local").pathname));
+    await fs.rm(storedPath, { force: true });
+    project.updatedAt = new Date().toISOString();
+    await writeProjects(projects);
+    res.status(204).end();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/ollama/health", async (_req, res) => {
+  try {
+    const response = await fetch(`${OLLAMA_URL}/api/tags`);
+    if (!response.ok) throw new Error(`Ollama ${response.status}`);
+    const data = await response.json();
+    const models = (data.models || []).map(item => item.name);
+    res.json({ ok: true, url: OLLAMA_URL, model: OLLAMA_MODEL, installed: models.includes(OLLAMA_MODEL), models });
+  } catch (error) {
+    res.status(503).json({ ok: false, url: OLLAMA_URL, model: OLLAMA_MODEL, error: error.message });
+  }
+});
+
+app.post("/api/projects/:id/storyboard", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const idea = String(req.body.idea || "").trim();
+    if (!idea) return res.status(400).json({ error: "Commercial idea is required." });
+    const storyboard = await generateStoryboard({
+      ollamaUrl: OLLAMA_URL,
+      model: String(req.body.model || OLLAMA_MODEL),
+      idea,
+      length: Number(req.body.length) || 30,
+      style: String(req.body.style || "cinematic"),
+      audience: String(req.body.audience || "general audience")
+    });
+    const now = new Date().toISOString();
+    const newScenes = storyboard.scenes.map((scene, index) => ({
+      id: crypto.randomUUID(),
+      title: scene.title,
+      description: scene.description,
+      imagePrompt: scene.imagePrompt,
+      narration: scene.narration,
+      duration: scene.duration,
+      cameraMovement: scene.cameraMovement,
+      imageId: null,
+      order: index,
+      createdAt: now,
+      updatedAt: now
+    }));
+    if (req.body.replaceExisting === false) {
+      const offset = project.scenes.length;
+      newScenes.forEach((scene, index) => { scene.order = offset + index; });
+      project.scenes.push(...newScenes);
+    } else {
+      project.scenes = newScenes;
+    }
+    project.storyboard = {
+      idea, length: Number(req.body.length) || 30, style: String(req.body.style || "cinematic"),
+      audience: String(req.body.audience || "general audience"), model: String(req.body.model || OLLAMA_MODEL),
+      title: storyboard.title, summary: storyboard.summary, generatedAt: now
+    };
+    project.updatedAt = now;
+    await writeProjects(projects);
+    res.status(201).json({ storyboard: project.storyboard, scenes: newScenes });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/projects", async (_req, res) => {
+  try {
+    const projects = await readProjects();
+    res.json(projects.map(publicProject).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/projects", async (req, res) => {
+  try {
+    const name = String(req.body.name || "").trim().slice(0, 100);
+    if (!name) return res.status(400).json({ error: "Project name is required." });
+
+    const projects = await readProjects();
+    const now = new Date().toISOString();
+    const project = {
+      id: crypto.randomUUID(),
+      name,
+      description: String(req.body.description || "").trim().slice(0, 500),
+      createdAt: now,
+      updatedAt: now,
+      images: [],
+      videos: [],
+      musicTracks: [],
+      scenes: []
+    };
+    projects.push(project);
+    await writeProjects(projects);
+    res.status(201).json(publicProject(project));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/projects/:id", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    res.json(publicProject(project));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+async function generateForProject(projects, project, settings, sourceImageId = null) {
+  const prompt = String(settings.prompt || "").trim();
+  const negativePrompt = String(settings.negativePrompt || "").trim();
+  const width = Math.min(768, Math.max(256, Number(settings.width) || 512));
+  const height = Math.min(768, Math.max(256, Number(settings.height) || 512));
+  const steps = Math.min(40, Math.max(1, Number(settings.steps) || 20));
+  const cfg = Math.min(15, Math.max(1, Number(settings.cfg) || 7));
+  const suppliedSeed = Number(settings.seed);
+  const seed = Number.isSafeInteger(suppliedSeed) && suppliedSeed > 0
+    ? suppliedSeed
+    : crypto.randomInt(1, 2_147_483_647);
+
+  if (!prompt) throw new Error("Prompt is required.");
+
+  const queued = await comfyFetch("/prompt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: makeWorkflow({ prompt, negativePrompt, width, height, steps, cfg, seed }),
+      client_id: crypto.randomUUID()
+    })
+  });
+  const queueResult = await queued.json();
+  if (!queueResult.prompt_id) {
+    throw new Error(`ComfyUI did not return a prompt_id: ${JSON.stringify(queueResult)}`);
+  }
+
+  const outputs = await waitForResult(queueResult.prompt_id);
+  const saved = [];
+  for (const output of outputs) {
+    const imageId = crypto.randomUUID();
+    const url = await copyComfyImage(output, project.id, imageId);
+    const record = {
+      id: imageId,
+      url,
+      originalFilename: output.filename,
+      prompt,
+      negativePrompt,
+      seed,
+      width,
+      height,
+      steps,
+      cfg,
+      checkpoint: CHECKPOINT,
+      sampler: "euler",
+      scheduler: "normal",
+      promptId: queueResult.prompt_id,
+      sourceImageId,
+      createdAt: new Date().toISOString()
+    };
+    project.images.push(record);
+    saved.push(record);
+  }
+  project.updatedAt = new Date().toISOString();
+  await writeProjects(projects);
+  return { promptId: queueResult.prompt_id, seed, images: saved };
+}
+
+app.patch("/api/projects/:id", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+
+    const name = String(req.body.name ?? project.name).trim().slice(0, 100);
+    if (!name) return res.status(400).json({ error: "Project name is required." });
+
+    project.name = name;
+    project.description = String(req.body.description ?? project.description ?? "").trim().slice(0, 500);
+    project.updatedAt = new Date().toISOString();
+    await writeProjects(projects);
+    res.json(publicProject(project));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/projects/:id", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const index = projects.findIndex(item => item.id === req.params.id);
+    if (index < 0) return res.status(404).json({ error: "Project not found." });
+
+    const [project] = projects.splice(index, 1);
+    await writeProjects(projects);
+    await fs.rm(path.join(PROJECT_FILES_DIR, project.id), { recursive: true, force: true });
+    res.status(204).end();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+app.post("/api/projects/:id/scenes", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+
+    const title = String(req.body.title || `Scene ${project.scenes.length + 1}`).trim().slice(0, 100);
+    if (!title) return res.status(400).json({ error: "Scene title is required." });
+
+    const now = new Date().toISOString();
+    const scene = {
+      id: crypto.randomUUID(),
+      title,
+      description: String(req.body.description || "").trim().slice(0, 500),
+      imagePrompt: String(req.body.imagePrompt || req.body.description || "").trim().slice(0, 4000),
+      narration: String(req.body.narration || "").trim().slice(0, 2000),
+      voiceUrl: null,
+      voiceModel: null,
+      voiceLengthScale: 1,
+      voiceGeneratedAt: null,
+      duration: Math.min(60, Math.max(1, Number(req.body.duration) || 5)),
+      cameraMovement: ["none", "zoom-in", "zoom-out", "pan-left", "pan-right"].includes(req.body.cameraMovement)
+        ? req.body.cameraMovement
+        : "zoom-in",
+      imageId: project.images.some(image => image.id === req.body.imageId) ? req.body.imageId : null,
+      order: project.scenes.length,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    project.scenes.push(scene);
+    project.updatedAt = now;
+    await writeProjects(projects);
+    res.status(201).json(scene);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch("/api/projects/:projectId/scenes/:sceneId", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const scene = project.scenes.find(item => item.id === req.params.sceneId);
+    if (!scene) return res.status(404).json({ error: "Scene not found." });
+
+    if (req.body.title !== undefined) {
+      const title = String(req.body.title).trim().slice(0, 100);
+      if (!title) return res.status(400).json({ error: "Scene title is required." });
+      scene.title = title;
+    }
+    if (req.body.description !== undefined) scene.description = String(req.body.description).trim().slice(0, 500);
+    if (req.body.imagePrompt !== undefined) scene.imagePrompt = String(req.body.imagePrompt).trim().slice(0, 4000);
+    if (req.body.narration !== undefined) {
+      const nextNarration = String(req.body.narration).trim().slice(0, 2000);
+      if (nextNarration !== scene.narration) { scene.voiceUrl = null; scene.voiceGeneratedAt = null; }
+      scene.narration = nextNarration;
+    }
+    if (req.body.duration !== undefined) scene.duration = Math.min(60, Math.max(1, Number(req.body.duration) || 5));
+    if (req.body.cameraMovement !== undefined) {
+      if (!["none", "zoom-in", "zoom-out", "pan-left", "pan-right"].includes(req.body.cameraMovement)) {
+        return res.status(400).json({ error: "Invalid camera movement." });
+      }
+      scene.cameraMovement = req.body.cameraMovement;
+    }
+    if (req.body.imageId !== undefined) {
+      if (req.body.imageId !== null && !project.images.some(image => image.id === req.body.imageId)) {
+        return res.status(400).json({ error: "Selected image does not exist in this project." });
+      }
+      scene.imageId = req.body.imageId;
+    }
+
+    scene.updatedAt = new Date().toISOString();
+    project.updatedAt = scene.updatedAt;
+    await writeProjects(projects);
+    res.json(scene);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/projects/:projectId/scenes/:sceneId", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const index = project.scenes.findIndex(item => item.id === req.params.sceneId);
+    if (index < 0) return res.status(404).json({ error: "Scene not found." });
+
+    project.scenes.splice(index, 1);
+    project.scenes.forEach((scene, order) => { scene.order = order; });
+    project.updatedAt = new Date().toISOString();
+    await writeProjects(projects);
+    res.status(204).end();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/projects/:projectId/scenes/:sceneId/move", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const index = project.scenes.findIndex(item => item.id === req.params.sceneId);
+    if (index < 0) return res.status(404).json({ error: "Scene not found." });
+
+    const direction = req.body.direction;
+    const target = direction === "up" ? index - 1 : direction === "down" ? index + 1 : -1;
+    if (target < 0 || target >= project.scenes.length) return res.json(project.scenes);
+
+    [project.scenes[index], project.scenes[target]] = [project.scenes[target], project.scenes[index]];
+    project.scenes.forEach((scene, order) => {
+      scene.order = order;
+      scene.updatedAt = new Date().toISOString();
+    });
+    project.updatedAt = new Date().toISOString();
+    await writeProjects(projects);
+    res.json(project.scenes);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+
+
+function publicImageJob(job) {
+  return {
+    id: job.id,
+    projectId: job.projectId,
+    status: job.status,
+    progress: job.progress,
+    stage: job.stage,
+    currentSceneId: job.currentSceneId || null,
+    completed: job.completed || 0,
+    total: job.total || 0,
+    cancelled: Boolean(job.cancelled),
+    error: job.error || null,
+    scenes: job.scenes || [],
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt
+  };
+}
+
+async function runSceneImageJob(job, defaults) {
+  try {
+    job.status = "running";
+    job.stage = "Preparing scene queue";
+    job.updatedAt = new Date().toISOString();
+
+    for (let index = 0; index < job.sceneIds.length; index++) {
+      if (job.cancelRequested) {
+        job.cancelled = true;
+        job.status = "cancelled";
+        job.stage = "Cancelled after current scene";
+        job.updatedAt = new Date().toISOString();
+        return;
+      }
+
+      const projects = await readProjects();
+      const project = projects.find(item => item.id === job.projectId);
+      if (!project) throw new Error("Project was deleted while image generation was running.");
+      const scene = project.scenes.find(item => item.id === job.sceneIds[index]);
+      const item = job.scenes.find(entry => entry.sceneId === job.sceneIds[index]);
+      if (!scene) {
+        item.status = "skipped";
+        item.error = "Scene no longer exists.";
+        job.completed += 1;
+        continue;
+      }
+
+      const prompt = String(scene.imagePrompt || scene.description || "").trim();
+      if (!prompt) {
+        item.status = "error";
+        item.error = "Scene has no image prompt.";
+        job.completed += 1;
+        continue;
+      }
+
+      job.currentSceneId = scene.id;
+      job.stage = `Generating scene ${index + 1} of ${job.total}: ${scene.title}`;
+      item.status = "running";
+      job.updatedAt = new Date().toISOString();
+
+      try {
+        const result = await generateForProject(projects, project, { ...defaults, prompt });
+        const generated = result.images[0];
+        const refreshedProjects = await readProjects();
+        const refreshedProject = refreshedProjects.find(entry => entry.id === job.projectId);
+        const refreshedScene = refreshedProject?.scenes.find(entry => entry.id === scene.id);
+        if (refreshedScene && generated) {
+          refreshedScene.imageId = generated.id;
+          refreshedScene.updatedAt = new Date().toISOString();
+          refreshedProject.updatedAt = refreshedScene.updatedAt;
+          await writeProjects(refreshedProjects);
+        }
+        item.status = "complete";
+        item.imageId = generated?.id || null;
+        item.seed = result.seed;
+      } catch (error) {
+        item.status = "error";
+        item.error = error.message;
+      }
+
+      job.completed += 1;
+      job.progress = Math.round((job.completed / Math.max(1, job.total)) * 100);
+      job.updatedAt = new Date().toISOString();
+    }
+
+    job.currentSceneId = null;
+    const failures = job.scenes.filter(item => item.status === "error").length;
+    job.status = failures ? "complete-with-errors" : "complete";
+    job.stage = failures ? `Complete with ${failures} failed scene${failures === 1 ? "" : "s"}` : "All scene images complete";
+    job.progress = 100;
+    job.updatedAt = new Date().toISOString();
+  } catch (error) {
+    console.error(error);
+    job.status = "error";
+    job.stage = "Batch generation failed";
+    job.error = error.message;
+    job.updatedAt = new Date().toISOString();
+  }
+}
+
+
+
+app.post("/api/projects/:id/generate-scene-images", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+
+    const onlyMissing = req.body?.onlyMissing !== false;
+    const requestedSceneIds = Array.isArray(req.body?.sceneIds) ? new Set(req.body.sceneIds.map(String)) : null;
+    const scenes = [...(project.scenes || [])]
+      .sort((a, b) => a.order - b.order)
+      .filter(scene => (!requestedSceneIds || requestedSceneIds.has(scene.id)) && (!onlyMissing || !scene.imageId));
+
+    if (!scenes.length) return res.status(400).json({ error: onlyMissing ? "Every selected scene already has an image." : "No scenes were selected." });
+    const missingPrompt = scenes.find(scene => !String(scene.imagePrompt || scene.description || "").trim());
+    if (missingPrompt) return res.status(400).json({ error: `Scene “${missingPrompt.title}” has no image prompt.` });
+
+    const jobId = crypto.randomUUID();
+    const job = {
+      id: jobId,
+      projectId: project.id,
+      status: "queued",
+      progress: 0,
+      stage: "Queued",
+      completed: 0,
+      total: scenes.length,
+      sceneIds: scenes.map(scene => scene.id),
+      scenes: scenes.map(scene => ({ sceneId: scene.id, title: scene.title, status: "queued", imageId: null, seed: null, error: null })),
+      cancelRequested: false,
+      cancelled: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    imageJobs.set(jobId, job);
+
+    const defaults = {
+      negativePrompt: String(req.body?.negativePrompt || "cartoon, anime, illustration, CGI, blurry, low quality, watermark, logo, text, duplicate person, deformed hands, extra fingers"),
+      width: Math.min(768, Math.max(256, Number(req.body?.width) || 512)),
+      height: Math.min(768, Math.max(256, Number(req.body?.height) || 512)),
+      steps: Math.min(40, Math.max(1, Number(req.body?.steps) || 20)),
+      cfg: Math.min(15, Math.max(1, Number(req.body?.cfg) || 7))
+    };
+
+    res.status(202).json(publicImageJob(job));
+    queueMicrotask(() => runSceneImageJob(job, defaults));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/image-jobs/:jobId", (req, res) => {
+  const job = imageJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Image job not found." });
+  res.json(publicImageJob(job));
+});
+
+app.post("/api/image-jobs/:jobId/cancel", (req, res) => {
+  const job = imageJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Image job not found." });
+  if (["complete", "complete-with-errors", "cancelled", "error"].includes(job.status)) return res.json(publicImageJob(job));
+  job.cancelRequested = true;
+  job.stage = "Cancellation requested; finishing current scene";
+  job.updatedAt = new Date().toISOString();
+  res.json(publicImageJob(job));
+});
+
+app.post("/api/projects/:id/render-video", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const settings = normalizeRenderSettings(req.body || {});
+    const jobId = crypto.randomUUID();
+    const job = { id: jobId, projectId: project.id, status: "queued", progress: 0, stage: "Queued", createdAt: new Date().toISOString() };
+    renderJobs.set(jobId, job);
+    res.status(202).json(job);
+
+    queueMicrotask(async () => {
+      try {
+        job.status = "running";
+        const video = await renderProjectVideo(project, settings, patch => Object.assign(job, patch));
+        await writeProjects(projects);
+        Object.assign(job, { status: "complete", progress: 100, stage: "Complete", video });
+      } catch (error) {
+        console.error(error);
+        Object.assign(job, { status: "error", stage: "Failed", error: error.message });
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/render-jobs/:jobId", (req, res) => {
+  const job = renderJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Render job not found." });
+  res.json(job);
+});
+
+app.delete("/api/projects/:projectId/videos/:videoId", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const index=(project.videos||[]).findIndex(v=>v.id===req.params.videoId);
+    if(index<0) return res.status(404).json({error:"Video not found."});
+    const [video]=project.videos.splice(index,1);
+    await writeProjects(projects);
+    await fs.rm(path.join(PROJECT_FILES_DIR,project.id,"videos",path.basename(video.filename)),{force:true});
+    res.status(204).end();
+  } catch(error){ res.status(500).json({error:error.message}); }
+});
+
+app.post("/api/projects/:id/generate", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    res.json(await generateForProject(projects, project, req.body));
+  } catch (error) {
+    console.error(error);
+    const status = error.message === "Prompt is required." ? 400 : 500;
+    res.status(status).json({ error: error.message });
+  }
+});
+
+app.post("/api/projects/:projectId/images/:imageId/regenerate", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const image = project.images.find(item => item.id === req.params.imageId);
+    if (!image) return res.status(404).json({ error: "Image not found." });
+
+    const settings = {
+      prompt: image.prompt,
+      negativePrompt: image.negativePrompt,
+      width: image.width,
+      height: image.height,
+      steps: image.steps,
+      cfg: image.cfg,
+      seed: req.body?.randomSeed ? undefined : image.seed
+    };
+    res.json(await generateForProject(projects, project, settings, image.id));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/projects/:projectId/images/:imageId", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const index = project.images.findIndex(image => image.id === req.params.imageId);
+    if (index < 0) return res.status(404).json({ error: "Image not found." });
+    const [image] = project.images.splice(index, 1);
+    for (const scene of project.scenes || []) {
+      if (scene.imageId === image.id) {
+        scene.imageId = null;
+        scene.updatedAt = new Date().toISOString();
+      }
+    }
+    project.updatedAt = new Date().toISOString();
+    await writeProjects(projects);
+    const filePath = path.join(PROJECT_FILES_DIR, project.id, path.basename(new URL(image.url, "http://local").pathname));
+    await fs.rm(filePath, { force: true });
+    res.status(204).end();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+await ensureStorage();
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`Stinky AI Studio v0.11: http://127.0.0.1:${PORT}`);
+  console.log(`ComfyUI API: ${COMFY_URL}`);
+  console.log(`Checkpoint: ${CHECKPOINT}`);
+  console.log(`Ollama: ${OLLAMA_URL} (${OLLAMA_MODEL})`);
+  console.log(`Piper: ${PIPER_COMMAND} (${PIPER_MODEL})`);
+});
