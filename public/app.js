@@ -4,7 +4,8 @@ const state = {
   editingProjectId: null,
   editingSceneId: null,
   dialogImage: null,
-  imageJobId: null
+  imageJobId: null,
+  playingAudio: null
 };
 
 const byId = id => document.querySelector(`#${id}`);
@@ -45,6 +46,9 @@ const generateAllImagesButton = byId("generateAllImagesButton");
 const cancelImageBatchButton = byId("cancelImageBatchButton");
 const imageBatchProgress = byId("imageBatchProgress");
 const imageBatchMessage = byId("imageBatchMessage");
+const piperStatus = byId("piperStatus");
+const generateAllVoicesButton = byId("generateAllVoicesButton");
+const voiceMessage = byId("voiceMessage");
 
 async function jsonFetch(url, options = {}) {
   const response = await fetch(url, options);
@@ -140,7 +144,7 @@ function renderScenes(project) {
     title.textContent = scene.title;
     const badges = document.createElement("div");
     badges.className = "scene-badges";
-    badges.innerHTML = `<span>${scene.duration}s</span><span>${cameraMovementLabel(scene.cameraMovement)}</span><span class="${selectedImage ? "scene-ready" : "scene-missing"}">${selectedImage ? "Image ready" : "Needs image"}</span>`;
+    badges.innerHTML = `<span>${scene.duration}s</span><span>${cameraMovementLabel(scene.cameraMovement)}</span><span class="${selectedImage ? "scene-ready" : "scene-missing"}">${selectedImage ? "Image ready" : "Needs image"}</span><span class="${scene.voiceUrl ? "scene-ready" : "scene-missing"}">${scene.voiceUrl ? "Voice ready" : "Needs voice"}</span>`;
     heading.append(title, badges);
 
     const description = document.createElement("p");
@@ -154,6 +158,7 @@ function renderScenes(project) {
     controls.className = "scene-controls";
     controls.append(
       createCardButton("Use prompt", "text-button", () => loadScenePrompt(scene)),
+      createCardButton(scene.voiceUrl ? "Play voice" : "Generate voice", "text-button", () => scene.voiceUrl ? playSceneVoice(scene) : generateSceneVoice(scene)),
       createCardButton("Edit", "text-button", () => showSceneDialog(scene)),
       createCardButton("Move up", "text-button", () => moveScene(scene, "up"), index === 0),
       createCardButton("Move down", "text-button", () => moveScene(scene, "down"), index === scenes.length - 1),
@@ -191,7 +196,7 @@ function renderVideos(project) {
     const info=document.createElement("div"); info.className="card-body";
     const title=document.createElement("strong"); title.textContent=video.filename;
     const meta=document.createElement("p"); meta.className="card-meta"; const mb = video.fileSize ? `${(video.fileSize / 1024 / 1024).toFixed(1)} MB` : "";
-    meta.textContent = `${video.duration}s · ${video.sceneCount} scenes · ${video.width}×${video.height} · ${video.fps || 30} fps${video.transition ? ` · ${video.transition}` : ""}${video.encoder ? ` · ${video.encoder}` : ""}${mb ? ` · ${mb}` : ""}`;
+    meta.textContent = `${video.duration}s · ${video.sceneCount} scenes · ${video.width}×${video.height} · ${video.fps || 30} fps${video.transition ? ` · ${video.transition}` : ""}${video.encoder ? ` · ${video.encoder}` : ""}${video.narration ? " · narration" : ""}${mb ? ` · ${mb}` : ""}`;
     const actions=document.createElement("div"); actions.className="card-buttons";
     const download=document.createElement("a"); download.href=video.url; download.download=video.filename; download.className="text-button link-button"; download.textContent="Download";
     const del=createCardButton("Delete","text-button danger-text",()=>deleteVideo(video));
@@ -284,6 +289,74 @@ async function cancelImageBatch() {
   }
 }
 
+function playSceneVoice(scene) {
+  if (!scene.voiceUrl) return;
+  if (state.playingAudio) state.playingAudio.pause();
+  const audio = new Audio(`${scene.voiceUrl}?t=${Date.now()}`);
+  state.playingAudio = audio;
+  audio.play().catch(error => { voiceMessage.textContent = error.message; });
+}
+
+async function generateSceneVoice(scene) {
+  const project = currentProject();
+  if (!project) return;
+  voiceMessage.textContent = `Generating narration for “${scene.title}”…`;
+  try {
+    const updated = await jsonFetch(`/api/projects/${project.id}/scenes/${scene.id}/voice`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lengthScale: Number(byId("voiceLengthScale").value) })
+    });
+    voiceMessage.textContent = `Narration ready for “${scene.title}”.`;
+    await loadProjects(project.id);
+    playSceneVoice(updated);
+  } catch (error) {
+    voiceMessage.textContent = error.message;
+  }
+}
+
+async function generateAllSceneVoices() {
+  const project = currentProject();
+  if (!project) return;
+  const regenerate = byId("regenerateVoices").checked;
+  const eligible = (project.scenes || []).filter(scene => String(scene.narration || "").trim() && (regenerate || !scene.voiceUrl));
+  if (!eligible.length) {
+    voiceMessage.textContent = "Every narrated scene already has generated audio.";
+    return;
+  }
+  if (regenerate && !confirm(`Regenerate narration for ${eligible.length} scene(s)?`)) return;
+  setBusy(generateAllVoicesButton, true, "Generating narration…");
+  voiceMessage.textContent = `Generating ${eligible.length} narration track(s)…`;
+  try {
+    const result = await jsonFetch(`/api/projects/${project.id}/generate-scene-voices`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ regenerate, lengthScale: Number(byId("voiceLengthScale").value) })
+    });
+    const failures = result.results.filter(item => !item.ok);
+    voiceMessage.textContent = failures.length
+      ? `Generated ${result.generated}/${result.total}. ${failures.length} failed.`
+      : `Generated ${result.generated} narration track(s).`;
+    await loadProjects(project.id);
+  } catch (error) {
+    voiceMessage.textContent = error.message;
+  } finally {
+    setBusy(generateAllVoicesButton, false, "Generating narration…");
+    checkPiper();
+  }
+}
+
+async function checkPiper() {
+  try {
+    const status = await jsonFetch("/api/piper/health");
+    piperStatus.textContent = `${status.model} ready`;
+    piperStatus.className = "status ok";
+  } catch {
+    piperStatus.textContent = "Piper offline";
+    piperStatus.className = "status bad";
+  }
+}
+
 async function renderVideo() {
   const project = currentProject();
   if (!project) return;
@@ -300,7 +373,8 @@ async function renderVideo() {
         fps: Number(renderFps.value),
         transition: renderTransition.value,
         encoder: renderEncoder.value,
-        transitionDuration: 0.6
+        transitionDuration: 0.6,
+        includeNarration: byId("includeNarration").checked
       })
     });
 
@@ -713,6 +787,7 @@ byId("deleteProjectButton").addEventListener("click", deleteProject);
 byId("newSceneButton").addEventListener("click", () => showSceneDialog());
 renderVideoButton.addEventListener("click", renderVideo);
 generateAllImagesButton.addEventListener("click", generateAllSceneImages);
+generateAllVoicesButton.addEventListener("click", generateAllSceneVoices);
 cancelImageBatchButton.addEventListener("click", cancelImageBatch);
 byId("cancelProject").addEventListener("click", () => projectDialog.close());
 byId("cancelScene").addEventListener("click", () => sceneDialog.close());
@@ -735,4 +810,4 @@ byId("loadFirstPromptButton").addEventListener("click", () => {
   else storyboardMessage.textContent = "Generate or add a scene first.";
 });
 
-await Promise.all([loadProjects(), checkHealth(), checkOllama()]);
+await Promise.all([loadProjects(), checkHealth(), checkOllama(), checkPiper()]);

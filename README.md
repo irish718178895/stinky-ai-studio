@@ -1,26 +1,30 @@
-# Stinky AI Studio v0.8
+# Stinky AI Studio v0.9
 
-Local image generation, AI storyboarding, queued scene-image production, scene planning, and cinematic MP4 rendering.
+A completely local creative pipeline using ComfyUI, Ollama, Piper, Node.js, and FFmpeg.
 
-## v0.8 highlights
+## Features
 
-- Generate every missing storyboard image in one queued operation
-- Sequential ComfyUI processing to fit limited VRAM
-- Automatic image saving and scene assignment
-- Per-job progress and current-scene status
-- Cancellation after the active ComfyUI generation finishes
-- Optional regeneration of scenes that already have assigned images
-- Failed scenes remain unassigned so they can be retried after prompt edits
+- AI storyboard generation through Ollama
+- Queued scene-image generation through ComfyUI
+- Ordered scene builder
+- Local Piper narration per scene
+- 720p/1080p cinematic video rendering
+- Cuts, crossfades, dip-to-black, audio crossfades, and optional narration
 
-## Services
+## Start
 
-- Stinky AI Studio: `http://127.0.0.1:3000`
-- ComfyUI: `http://127.0.0.1:8188`
-- Ollama: `http://127.0.0.1:11434`
+```bash
+npm install
+npm start
+```
 
-## Defaults
+The app listens on `http://127.0.0.1:3000`.
 
-- ComfyUI checkpoint: `dreamshaper_8.safetensors`
-- Ollama model: `qwen2.5:3b`
+## Install Piper
 
-Override with `CHECKPOINT`, `COMFY_URL`, `OLLAMA_URL`, or `OLLAMA_MODEL` environment variables.
+```bash
+sudo apt install -y python3-venv curl
+./INSTALL-PIPER.sh
+```
+
+The default voice is expected at `voices/en_US-lessac-medium.onnx`. Override the executable or model with `PIPER_COMMAND` and `PIPER_MODEL` environment variables.

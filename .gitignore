@@ -14,3 +14,6 @@ data/projects.json
 *.pt
 *.pth
 output/
+.venv-piper/
+voices/*.onnx
+voices/*.onnx.json

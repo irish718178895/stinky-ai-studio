@@ -229,3 +229,10 @@ select:focus { outline: 2px solid #c97b2b; border-color: transparent; }
 .checkbox-label.compact { margin: 0; white-space: nowrap; }
 .scene-ready { color: #9fe3ac; border-color: rgba(87, 190, 111, 0.45) !important; }
 .scene-missing { color: #f1bd78; border-color: rgba(224, 146, 49, 0.45) !important; }
+
+
+.voice-studio-bar { margin: 1.25rem 0; padding: 1rem; border: 1px solid var(--border); background: rgba(255,255,255,.025); display: grid; gap: .85rem; border-radius: 10px; }
+.voice-studio-bar > div:first-child { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+.voice-controls { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; }
+.voice-controls label:not(.checkbox-label) { min-width: 150px; }
+.render-audio { align-self: center; padding-top: 1.25rem; }

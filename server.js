@@ -20,6 +20,8 @@ const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 const PROJECT_FILES_DIR = path.join(DATA_DIR, "projects");
 const renderJobs = new Map();
 const imageJobs = new Map();
+const PIPER_COMMAND = process.env.PIPER_COMMAND || path.join(__dirname, ".venv-piper", "bin", "piper");
+const PIPER_MODEL = process.env.PIPER_MODEL || path.join(__dirname, "voices", "en_US-lessac-medium.onnx");
 const RESOLUTIONS = {
   "720p": { width: 1280, height: 720 },
   "1080p": { width: 1920, height: 1080 }
@@ -66,6 +68,10 @@ function normalizeProject(project) {
         description: String(scene.description || "").slice(0, 500),
         imagePrompt: String(scene.imagePrompt || scene.prompt || scene.description || "").slice(0, 4000),
         narration: String(scene.narration || "").slice(0, 2000),
+        voiceUrl: scene.voiceUrl || null,
+        voiceModel: scene.voiceModel || null,
+        voiceLengthScale: Math.min(2, Math.max(0.5, Number(scene.voiceLengthScale) || 1)),
+        voiceGeneratedAt: scene.voiceGeneratedAt || null,
         duration: Math.min(60, Math.max(1, Number(scene.duration) || 5)),
         cameraMovement: ["none", "zoom-in", "zoom-out", "pan-left", "pan-right"].includes(scene.cameraMovement)
           ? scene.cameraMovement
@@ -182,6 +188,49 @@ function runCommand(command, args, onProgress = null) {
   });
 }
 
+function runCommandWithInput(command, args, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk.toString(); });
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`${command} exited with code ${code}: ${stderr.slice(-6000)}`));
+    });
+    child.stdin.end(input);
+  });
+}
+
+async function requirePiper() {
+  try { await fs.access(PIPER_COMMAND); }
+  catch { throw new Error(`Piper is not installed at ${PIPER_COMMAND}. Run the v0.9 install commands.`); }
+  try { await fs.access(PIPER_MODEL); }
+  catch { throw new Error(`Piper voice model is missing at ${PIPER_MODEL}. Download the model and its JSON file.`); }
+}
+
+async function synthesizeSceneVoice(project, scene, lengthScale = 1) {
+  const narration = String(scene.narration || "").trim();
+  if (!narration) throw new Error(`Scene “${scene.title}” has no narration.`);
+  await requirePiper();
+  const voicesDir = path.join(PROJECT_FILES_DIR, project.id, "voices");
+  await fs.mkdir(voicesDir, { recursive: true });
+  const filename = `${scene.id}.wav`;
+  const outputPath = path.join(voicesDir, filename);
+  const scale = Math.min(2, Math.max(0.5, Number(lengthScale) || 1));
+  await runCommandWithInput(PIPER_COMMAND, ["--model", PIPER_MODEL, "--output_file", outputPath, "--length_scale", String(scale)], `${narration}
+`);
+  scene.voiceUrl = `/generated/${encodeURIComponent(project.id)}/voices/${encodeURIComponent(filename)}`;
+  scene.voiceModel = path.basename(PIPER_MODEL);
+  scene.voiceLengthScale = scale;
+  scene.voiceGeneratedAt = new Date().toISOString();
+  scene.updatedAt = scene.voiceGeneratedAt;
+  project.updatedAt = scene.voiceGeneratedAt;
+  return scene.voiceUrl;
+}
+
 async function requireFfmpeg() {
   try { await runCommand("ffmpeg", ["-version"]); }
   catch { throw new Error("FFmpeg is not installed or not in PATH. Install it with: sudo apt install ffmpeg"); }
@@ -200,7 +249,8 @@ function normalizeRenderSettings(body = {}) {
   const transition = ["cut", "crossfade", "dip-black"].includes(body.transition) ? body.transition : "crossfade";
   const transitionDuration = Math.min(1.5, Math.max(0.25, Number(body.transitionDuration) || 0.6));
   const encoder = ["auto", "cpu", "nvidia"].includes(body.encoder) ? body.encoder : "auto";
-  return { resolution, fps, transition, transitionDuration, encoder, ...RESOLUTIONS[resolution] };
+  const includeNarration = body.includeNarration !== false;
+  return { resolution, fps, transition, transitionDuration, encoder, includeNarration, ...RESOLUTIONS[resolution] };
 }
 
 function easeExpression() {
@@ -272,7 +322,19 @@ async function renderProjectVideo(project, settings, update) {
       const clip = path.join(workDir, `scene-${String(i + 1).padStart(3, "0")}.mp4`);
       const duration = Math.max(1, Number(scene.duration) || 5);
       const frames = Math.max(1, Math.round(duration * settings.fps));
-      const args = ["-y", "-loop", "1", "-i", inputPath, "-vf", sceneFilter(scene, frames, settings.width, settings.height, settings.fps), "-frames:v", String(frames), "-r", String(settings.fps), "-c:v", encoder.name, ...encoder.args, "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", clip];
+      const voicePath = settings.includeNarration && scene.voiceUrl
+        ? path.join(projectDir, "voices", path.basename(new URL(scene.voiceUrl, "http://local").pathname))
+        : null;
+      const audioInput = voicePath
+        ? ["-i", voicePath]
+        : ["-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono"];
+      const args = ["-y", "-loop", "1", "-i", inputPath, ...audioInput,
+        "-vf", sceneFilter(scene, frames, settings.width, settings.height, settings.fps),
+        "-af", `apad,atrim=0:${duration}`,
+        "-frames:v", String(frames), "-t", String(duration), "-r", String(settings.fps),
+        "-map", "0:v:0", "-map", "1:a:0", "-c:v", encoder.name, ...encoder.args,
+        "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", clip];
       await runCommand("ffmpeg", args, text => parseProgress(text, duration, ratio => {
         update({ progress: Math.round(((i + ratio) / (resolved.length + 1)) * 100) });
       }));
@@ -292,19 +354,23 @@ async function renderProjectVideo(project, settings, update) {
       const td = Math.min(settings.transitionDuration, ...durations.map(d => Math.max(0.25, d / 3)));
       const inputs = clips.flatMap(clip => ["-i", clip]);
       let filters = "";
-      let previous = "0:v";
+      let previousVideo = "0:v";
+      let previousAudio = "0:a";
       let cumulative = durations[0];
       for (let i = 1; i < clips.length; i++) {
-        const output = i === clips.length - 1 ? "vout" : `v${i}`;
+        const videoOutput = i === clips.length - 1 ? "vout" : `v${i}`;
+        const audioOutput = i === clips.length - 1 ? "aout" : `a${i}`;
         const transitionName = settings.transition === "dip-black" ? "fadeblack" : "fade";
         const offset = Math.max(0, cumulative - td * i);
-        filters += `[${previous}][${i}:v]xfade=transition=${transitionName}:duration=${td}:offset=${offset.toFixed(3)}[${output}];`;
-        previous = output;
+        filters += `[${previousVideo}][${i}:v]xfade=transition=${transitionName}:duration=${td}:offset=${offset.toFixed(3)}[${videoOutput}];`;
+        filters += `[${previousAudio}][${i}:a]acrossfade=d=${td}:c1=tri:c2=tri[${audioOutput}];`;
+        previousVideo = videoOutput;
+        previousAudio = audioOutput;
         cumulative += durations[i];
       }
       filters = filters.replace(/;$/, "");
       const finalDuration = durations.reduce((a, b) => a + b, 0) - td * (clips.length - 1);
-      await runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters, "-map", "[vout]", "-c:v", encoder.name, ...encoder.args, "-pix_fmt", "yuv420p", "-r", String(settings.fps), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", outputPath], text => parseProgress(text, finalDuration, ratio => update({ progress: Math.round(((resolved.length + ratio) / (resolved.length + 1)) * 100) })));
+      await runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters, "-map", "[vout]", "-map", "[aout]", "-c:v", encoder.name, ...encoder.args, "-c:a", "aac", "-b:a", "160k", "-pix_fmt", "yuv420p", "-r", String(settings.fps), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", outputPath], text => parseProgress(text, finalDuration, ratio => update({ progress: Math.round(((resolved.length + ratio) / (resolved.length + 1)) * 100) })));
     }
 
     const stat = await fs.stat(outputPath);
@@ -315,7 +381,7 @@ async function renderProjectVideo(project, settings, update) {
       sceneCount: scenes.length, duration: Math.max(0, Number(duration.toFixed(2))),
       width: settings.width, height: settings.height, fps: settings.fps,
       resolution: settings.resolution, transition: settings.transition,
-      encoder: encoder.label, fileSize: stat.size,
+      encoder: encoder.label, narration: settings.includeNarration, fileSize: stat.size,
       createdAt: new Date().toISOString()
     };
     project.videos = Array.isArray(project.videos) ? project.videos : [];
@@ -334,6 +400,56 @@ app.get("/api/health", async (_req, res) => {
     res.json({ ok: true, comfyUrl: COMFY_URL, checkpoint: CHECKPOINT, stats: await response.json() });
   } catch (error) {
     res.status(503).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/piper/health", async (_req, res) => {
+  try {
+    await requirePiper();
+    res.json({ ok: true, command: PIPER_COMMAND, model: path.basename(PIPER_MODEL) });
+  } catch (error) {
+    res.status(503).json({ ok: false, command: PIPER_COMMAND, model: PIPER_MODEL, error: error.message });
+  }
+});
+
+app.post("/api/projects/:projectId/scenes/:sceneId/voice", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const scene = project.scenes.find(item => item.id === req.params.sceneId);
+    if (!scene) return res.status(404).json({ error: "Scene not found." });
+    await synthesizeSceneVoice(project, scene, req.body.lengthScale);
+    await writeProjects(projects);
+    res.json(scene);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/projects/:projectId/generate-scene-voices", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const regenerate = Boolean(req.body.regenerate);
+    const scenes = [...project.scenes].sort((a, b) => a.order - b.order)
+      .filter(scene => String(scene.narration || "").trim() && (regenerate || !scene.voiceUrl));
+    const results = [];
+    for (const scene of scenes) {
+      try {
+        await synthesizeSceneVoice(project, scene, req.body.lengthScale);
+        results.push({ sceneId: scene.id, title: scene.title, ok: true, voiceUrl: scene.voiceUrl });
+      } catch (error) {
+        results.push({ sceneId: scene.id, title: scene.title, ok: false, error: error.message });
+      }
+    }
+    await writeProjects(projects);
+    res.json({ generated: results.filter(item => item.ok).length, total: results.length, results });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -553,6 +669,10 @@ app.post("/api/projects/:id/scenes", async (req, res) => {
       description: String(req.body.description || "").trim().slice(0, 500),
       imagePrompt: String(req.body.imagePrompt || req.body.description || "").trim().slice(0, 4000),
       narration: String(req.body.narration || "").trim().slice(0, 2000),
+      voiceUrl: null,
+      voiceModel: null,
+      voiceLengthScale: 1,
+      voiceGeneratedAt: null,
       duration: Math.min(60, Math.max(1, Number(req.body.duration) || 5)),
       cameraMovement: ["none", "zoom-in", "zoom-out", "pan-left", "pan-right"].includes(req.body.cameraMovement)
         ? req.body.cameraMovement
@@ -587,7 +707,11 @@ app.patch("/api/projects/:projectId/scenes/:sceneId", async (req, res) => {
     }
     if (req.body.description !== undefined) scene.description = String(req.body.description).trim().slice(0, 500);
     if (req.body.imagePrompt !== undefined) scene.imagePrompt = String(req.body.imagePrompt).trim().slice(0, 4000);
-    if (req.body.narration !== undefined) scene.narration = String(req.body.narration).trim().slice(0, 2000);
+    if (req.body.narration !== undefined) {
+      const nextNarration = String(req.body.narration).trim().slice(0, 2000);
+      if (nextNarration !== scene.narration) { scene.voiceUrl = null; scene.voiceGeneratedAt = null; }
+      scene.narration = nextNarration;
+    }
     if (req.body.duration !== undefined) scene.duration = Math.min(60, Math.max(1, Number(req.body.duration) || 5));
     if (req.body.cameraMovement !== undefined) {
       if (!["none", "zoom-in", "zoom-out", "pan-left", "pan-right"].includes(req.body.cameraMovement)) {
@@ -932,8 +1056,9 @@ app.delete("/api/projects/:projectId/images/:imageId", async (req, res) => {
 
 await ensureStorage();
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`Stinky AI Studio v0.8: http://127.0.0.1:${PORT}`);
+  console.log(`Stinky AI Studio v0.9: http://127.0.0.1:${PORT}`);
   console.log(`ComfyUI API: ${COMFY_URL}`);
   console.log(`Checkpoint: ${CHECKPOINT}`);
   console.log(`Ollama: ${OLLAMA_URL} (${OLLAMA_MODEL})`);
+  console.log(`Piper: ${PIPER_COMMAND} (${PIPER_MODEL})`);
 });

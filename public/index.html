@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Stinky AI Studio v0.8</title>
+  <title>Stinky AI Studio v0.9</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -117,6 +117,26 @@
             </div>
           </div>
           <div id="sceneList" class="scene-list"></div>
+          <div class="voice-studio-bar">
+            <div>
+              <p class="eyebrow">LOCAL VOICE STUDIO</p>
+              <strong>Generate narration with Piper</strong>
+              <span id="piperStatus" class="status">Checking Piper…</span>
+            </div>
+            <div class="voice-controls">
+              <label>Voice speed
+                <select id="voiceLengthScale">
+                  <option value="0.85">Faster</option>
+                  <option value="1" selected>Normal</option>
+                  <option value="1.15">Slower</option>
+                  <option value="1.3">Much slower</option>
+                </select>
+              </label>
+              <button id="generateAllVoicesButton" class="primary" type="button">Generate missing narration</button>
+              <label class="checkbox-label compact"><input id="regenerateVoices" type="checkbox"> Regenerate existing narration</label>
+              <span id="voiceMessage" class="message"></span>
+            </div>
+          </div>
           <div class="render-settings">
             <label>Resolution
               <select id="renderResolution"><option value="720p">720p</option><option value="1080p">1080p</option></select>
@@ -130,6 +150,7 @@
             <label>Encoder
               <select id="renderEncoder"><option value="auto">Auto</option><option value="cpu">CPU / libx264</option><option value="nvidia">NVIDIA NVENC</option></select>
             </label>
+            <label class="checkbox-label render-audio"><input id="includeNarration" type="checkbox" checked> Include generated narration</label>
           </div>
           <div class="video-render-bar">
             <button id="renderVideoButton" class="primary" type="button">Render MP4</button>
