@@ -175,66 +175,129 @@ app.get("/api/projects/:id", async (req, res) => {
   }
 });
 
-app.post("/api/projects/:id/generate", async (req, res) => {
+async function generateForProject(projects, project, settings, sourceImageId = null) {
+  const prompt = String(settings.prompt || "").trim();
+  const negativePrompt = String(settings.negativePrompt || "").trim();
+  const width = Math.min(768, Math.max(256, Number(settings.width) || 512));
+  const height = Math.min(768, Math.max(256, Number(settings.height) || 512));
+  const steps = Math.min(40, Math.max(1, Number(settings.steps) || 20));
+  const cfg = Math.min(15, Math.max(1, Number(settings.cfg) || 7));
+  const suppliedSeed = Number(settings.seed);
+  const seed = Number.isSafeInteger(suppliedSeed) && suppliedSeed > 0
+    ? suppliedSeed
+    : crypto.randomInt(1, 2_147_483_647);
+
+  if (!prompt) throw new Error("Prompt is required.");
+
+  const queued = await comfyFetch("/prompt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: makeWorkflow({ prompt, negativePrompt, width, height, steps, cfg, seed }),
+      client_id: crypto.randomUUID()
+    })
+  });
+  const queueResult = await queued.json();
+  if (!queueResult.prompt_id) {
+    throw new Error(`ComfyUI did not return a prompt_id: ${JSON.stringify(queueResult)}`);
+  }
+
+  const outputs = await waitForResult(queueResult.prompt_id);
+  const saved = [];
+  for (const output of outputs) {
+    const imageId = crypto.randomUUID();
+    const url = await copyComfyImage(output, project.id, imageId);
+    const record = {
+      id: imageId,
+      url,
+      originalFilename: output.filename,
+      prompt,
+      negativePrompt,
+      seed,
+      width,
+      height,
+      steps,
+      cfg,
+      checkpoint: CHECKPOINT,
+      sampler: "euler",
+      scheduler: "normal",
+      promptId: queueResult.prompt_id,
+      sourceImageId,
+      createdAt: new Date().toISOString()
+    };
+    project.images.push(record);
+    saved.push(record);
+  }
+  project.updatedAt = new Date().toISOString();
+  await writeProjects(projects);
+  return { promptId: queueResult.prompt_id, seed, images: saved };
+}
+
+app.patch("/api/projects/:id", async (req, res) => {
   try {
     const projects = await readProjects();
     const project = projects.find(item => item.id === req.params.id);
     if (!project) return res.status(404).json({ error: "Project not found." });
 
-    const prompt = String(req.body.prompt || "").trim();
-    const negativePrompt = String(req.body.negativePrompt || "").trim();
-    const width = Math.min(768, Math.max(256, Number(req.body.width) || 512));
-    const height = Math.min(768, Math.max(256, Number(req.body.height) || 512));
-    const steps = Math.min(40, Math.max(1, Number(req.body.steps) || 20));
-    const cfg = Math.min(15, Math.max(1, Number(req.body.cfg) || 7));
-    const suppliedSeed = Number(req.body.seed);
-    const seed = Number.isSafeInteger(suppliedSeed) && suppliedSeed > 0
-      ? suppliedSeed
-      : crypto.randomInt(1, 2_147_483_647);
+    const name = String(req.body.name ?? project.name).trim().slice(0, 100);
+    if (!name) return res.status(400).json({ error: "Project name is required." });
 
-    if (!prompt) return res.status(400).json({ error: "Prompt is required." });
-
-    const queued = await comfyFetch("/prompt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: makeWorkflow({ prompt, negativePrompt, width, height, steps, cfg, seed }),
-        client_id: crypto.randomUUID()
-      })
-    });
-    const queueResult = await queued.json();
-    if (!queueResult.prompt_id) {
-      throw new Error(`ComfyUI did not return a prompt_id: ${JSON.stringify(queueResult)}`);
-    }
-
-    const outputs = await waitForResult(queueResult.prompt_id);
-    const saved = [];
-    for (const output of outputs) {
-      const imageId = crypto.randomUUID();
-      const url = await copyComfyImage(output, project.id, imageId);
-      const record = {
-        id: imageId,
-        url,
-        originalFilename: output.filename,
-        prompt,
-        negativePrompt,
-        seed,
-        width,
-        height,
-        steps,
-        cfg,
-        checkpoint: CHECKPOINT,
-        sampler: "euler",
-        scheduler: "normal",
-        promptId: queueResult.prompt_id,
-        createdAt: new Date().toISOString()
-      };
-      project.images.push(record);
-      saved.push(record);
-    }
+    project.name = name;
+    project.description = String(req.body.description ?? project.description ?? "").trim().slice(0, 500);
     project.updatedAt = new Date().toISOString();
     await writeProjects(projects);
-    res.json({ promptId: queueResult.prompt_id, seed, images: saved });
+    res.json(publicProject(project));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/projects/:id", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const index = projects.findIndex(item => item.id === req.params.id);
+    if (index < 0) return res.status(404).json({ error: "Project not found." });
+
+    const [project] = projects.splice(index, 1);
+    await writeProjects(projects);
+    await fs.rm(path.join(PROJECT_FILES_DIR, project.id), { recursive: true, force: true });
+    res.status(204).end();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/projects/:id/generate", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    res.json(await generateForProject(projects, project, req.body));
+  } catch (error) {
+    console.error(error);
+    const status = error.message === "Prompt is required." ? 400 : 500;
+    res.status(status).json({ error: error.message });
+  }
+});
+
+app.post("/api/projects/:projectId/images/:imageId/regenerate", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const image = project.images.find(item => item.id === req.params.imageId);
+    if (!image) return res.status(404).json({ error: "Image not found." });
+
+    const settings = {
+      prompt: image.prompt,
+      negativePrompt: image.negativePrompt,
+      width: image.width,
+      height: image.height,
+      steps: image.steps,
+      cfg: image.cfg,
+      seed: req.body?.randomSeed ? undefined : image.seed
+    };
+    res.json(await generateForProject(projects, project, settings, image.id));
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message });
@@ -261,7 +324,7 @@ app.delete("/api/projects/:projectId/images/:imageId", async (req, res) => {
 
 await ensureStorage();
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`Stinky AI Studio v0.2: http://127.0.0.1:${PORT}`);
+  console.log(`Stinky AI Studio v0.3: http://127.0.0.1:${PORT}`);
   console.log(`ComfyUI API: ${COMFY_URL}`);
   console.log(`Checkpoint: ${CHECKPOINT}`);
 });

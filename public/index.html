@@ -24,6 +24,10 @@
           <p class="eyebrow">PROJECT WORKSPACE</p>
           <h2 id="projectTitle">Create your first project</h2>
           <p id="projectDescription" class="muted">Images and generation settings will stay organized here.</p>
+          <div id="projectActions" class="project-actions" hidden>
+            <button id="editProjectButton" class="secondary small" type="button">Edit project</button>
+            <button id="deleteProjectButton" class="danger small" type="button">Delete project</button>
+          </div>
         </div>
         <div id="health" class="status">Checking ComfyUI…</div>
       </header>
@@ -54,6 +58,7 @@
             </div>
             <div class="actions">
               <button id="generateButton" class="primary" type="submit">Generate and save</button>
+              <button id="clearSeedButton" class="secondary" type="button">Random seed</button>
               <p id="message" class="message"></p>
             </div>
           </form>
@@ -71,17 +76,17 @@
   </div>
 
   <dialog id="projectDialog">
-    <form id="projectForm" method="dialog" class="dialog-form">
+    <form id="projectForm" class="dialog-form">
       <div>
-        <p class="eyebrow">NEW PROJECT</p>
-        <h3>Create a project</h3>
+        <p id="projectDialogEyebrow" class="eyebrow">NEW PROJECT</p>
+        <h3 id="projectDialogTitle">Create a project</h3>
       </div>
       <label>Project name<input id="projectName" maxlength="100" required placeholder="Railroad Commercial"></label>
       <label>Description<textarea id="projectDesc" rows="3" maxlength="500" placeholder="Optional campaign notes"></textarea></label>
       <p id="projectError" class="error"></p>
       <div class="dialog-actions">
         <button id="cancelProject" type="button" class="secondary">Cancel</button>
-        <button type="submit" class="primary">Create project</button>
+        <button id="saveProjectButton" type="submit" class="primary">Create project</button>
       </div>
     </form>
   </dialog>
@@ -90,8 +95,14 @@
     <button id="closeImageDialog" class="close-button" aria-label="Close">×</button>
     <img id="largeImage" alt="Generated image">
     <div id="imageMetadata" class="metadata"></div>
+    <div class="dialog-actions image-actions">
+      <button id="useImageSettingsButton" class="secondary" type="button">Use these settings</button>
+      <button id="regenerateImageButton" class="primary" type="button">Regenerate same seed</button>
+      <button id="regenerateRandomButton" class="secondary" type="button">Regenerate random seed</button>
+      <button id="deleteDialogImageButton" class="danger" type="button">Delete image</button>
+    </div>
   </dialog>
 
-<script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

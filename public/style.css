@@ -83,3 +83,12 @@ dialog::backdrop { background: rgba(0,0,0,.75); }
   .topbar { display: block; }
   .status { display: inline-block; margin-top: 12px; }
 }
+.project-actions { display: flex; gap: 9px; margin-top: 14px; }
+.small { padding: 8px 11px; font-size: .82rem; }
+.danger { border: 1px solid #864942; background: #3a211e; color: #ffb1a7; border-radius: 8px; padding: 12px 17px; font-weight: 850; }
+.danger:hover { background: #4a2723; }
+.card-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #40372e; }
+.text-button { border: 0; padding: 0; background: transparent; color: #d99a50; font-size: .78rem; font-weight: 800; }
+.text-button:hover { color: #f0b873; }
+.danger-text { color: #cf8e84; }
+.image-actions { flex-wrap: wrap; margin-top: 18px; }
