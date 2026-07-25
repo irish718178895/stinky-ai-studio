@@ -38,6 +38,11 @@ Upload a local MP3, WAV, M4A, AAC, OGG, or FLAC file to a project, preview it in
 
 The backend now starts from a thin `server.js` bootstrap. Runtime configuration lives in `server/config.js`, project persistence lives in `server/services/project-store.js`, and the Express application lives in `server/app.js`. This is the first behavior-preserving step toward independent routes, AI providers, render services, and background jobs.
 
-## v0.11.1 service architecture
+## v0.11.2 service architecture
 
 External engine code now lives under `server/services/`, while shared child-process and media helpers live under `server/utils/`. The HTTP API remains compatible with v0.10 and v0.11.0.
+
+
+## v0.11.2 architecture
+
+HTTP endpoints are organized under `server/routes/`, while `server/app.js` handles application assembly and startup.
