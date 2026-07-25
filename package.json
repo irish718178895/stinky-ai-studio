@@ -1,8 +1,8 @@
 {
   "name": "stinky-ai-studio",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "private": true,
-  "description": "Local project-based image studio powered by ComfyUI with project editing and image regeneration.",
+  "description": "Local ComfyUI image studio with a cinematic FFmpeg renderer, transitions, progress, and GPU encoding.",
   "type": "module",
   "scripts": {
     "start": "node server.js",

@@ -73,8 +73,34 @@
             </div>
             <button id="newSceneButton" class="primary small" type="button">+ Add scene</button>
           </div>
-          <p class="muted scene-help">Build the ordered shot list now. Video rendering, narration, and captions will use these scene settings in the next release.</p>
+          <p class="muted scene-help">Assign an image, duration, and camera movement to every scene, then render a cinematic local MP4.</p>
           <div id="sceneList" class="scene-list"></div>
+          <div class="render-settings">
+            <label>Resolution
+              <select id="renderResolution"><option value="720p">720p</option><option value="1080p">1080p</option></select>
+            </label>
+            <label>FPS
+              <select id="renderFps"><option value="24">24</option><option value="30" selected>30</option><option value="60">60</option></select>
+            </label>
+            <label>Transition
+              <select id="renderTransition"><option value="crossfade">Crossfade</option><option value="dip-black">Dip to black</option><option value="cut">Cut</option></select>
+            </label>
+            <label>Encoder
+              <select id="renderEncoder"><option value="auto">Auto</option><option value="cpu">CPU / libx264</option><option value="nvidia">NVIDIA NVENC</option></select>
+            </label>
+          </div>
+          <div class="video-render-bar">
+            <button id="renderVideoButton" class="primary" type="button">Render MP4</button>
+            <div class="render-progress-wrap">
+              <progress id="renderProgress" max="100" value="0" hidden></progress>
+              <span id="renderMessage" class="message"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="video-section">
+          <div class="section-title"><h3>Rendered videos</h3><span id="videoCount" class="count">0 videos</span></div>
+          <div id="videoList" class="video-list"></div>
         </section>
 
         <section class="gallery-section">

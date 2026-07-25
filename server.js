@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +15,11 @@ const CHECKPOINT = process.env.CHECKPOINT || "dreamshaper_8.safetensors";
 const DATA_DIR = path.join(__dirname, "data");
 const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 const PROJECT_FILES_DIR = path.join(DATA_DIR, "projects");
+const renderJobs = new Map();
+const RESOLUTIONS = {
+  "720p": { width: 1280, height: 720 },
+  "1080p": { width: 1920, height: 1080 }
+};
 
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -48,6 +54,7 @@ function normalizeProject(project) {
   return {
     ...project,
     images,
+    videos: Array.isArray(project.videos) ? project.videos : [],
     scenes: scenes
       .map((scene, index) => ({
         id: scene.id || crypto.randomUUID(),
@@ -150,6 +157,172 @@ async function copyComfyImage(image, projectId, imageId) {
   return `/generated/${encodeURIComponent(projectId)}/${encodeURIComponent(storedName)}`;
 }
 
+
+function runCommand(command, args, onProgress = null) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => {
+      const text = chunk.toString();
+      stdout += text;
+      if (onProgress) onProgress(text);
+    });
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`${command} exited with code ${code}: ${stderr.slice(-6000)}`));
+    });
+  });
+}
+
+async function requireFfmpeg() {
+  try { await runCommand("ffmpeg", ["-version"]); }
+  catch { throw new Error("FFmpeg is not installed or not in PATH. Install it with: sudo apt install ffmpeg"); }
+}
+
+async function nvencAvailable() {
+  try {
+    const result = await runCommand("ffmpeg", ["-hide_banner", "-encoders"]);
+    return result.stdout.includes("h264_nvenc");
+  } catch { return false; }
+}
+
+function normalizeRenderSettings(body = {}) {
+  const resolution = RESOLUTIONS[body.resolution] ? body.resolution : "720p";
+  const fps = [24, 30, 60].includes(Number(body.fps)) ? Number(body.fps) : 30;
+  const transition = ["cut", "crossfade", "dip-black"].includes(body.transition) ? body.transition : "crossfade";
+  const transitionDuration = Math.min(1.5, Math.max(0.25, Number(body.transitionDuration) || 0.6));
+  const encoder = ["auto", "cpu", "nvidia"].includes(body.encoder) ? body.encoder : "auto";
+  return { resolution, fps, transition, transitionDuration, encoder, ...RESOLUTIONS[resolution] };
+}
+
+function easeExpression() {
+  // Smoothstep: t²(3-2t), giving gentle acceleration and deceleration.
+  return "((on/MAX)*(on/MAX)*(3-2*(on/MAX)))";
+}
+
+function sceneFilter(scene, frames, width, height, fps) {
+  const max = Math.max(1, frames - 1);
+  const eased = easeExpression().replaceAll("MAX", String(max));
+  const panWidth = Math.round(width * 1.16);
+  const standardScale = `scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos`;
+  const panScale = `scale=${panWidth}:${height}:force_original_aspect_ratio=increase:flags=lanczos`;
+
+  switch (scene.cameraMovement) {
+    case "zoom-out":
+      return `${standardScale},zoompan=z='max(1.0,1.14-0.14*${eased})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+    case "pan-left":
+      return `${panScale},zoompan=z=1:x='(iw-ow)*(1-${eased})':y='(ih-oh)/2':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+    case "pan-right":
+      return `${panScale},zoompan=z=1:x='(iw-ow)*${eased}':y='(ih-oh)/2':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+    case "none":
+      return `${standardScale},zoompan=z=1:x='(iw-ow)/2':y='(ih-oh)/2':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+    case "zoom-in":
+    default:
+      return `${standardScale},zoompan=z='min(1.14,1+0.14*${eased})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${width}x${height}:fps=${fps},format=yuv420p`;
+  }
+}
+
+function parseProgress(text, durationSeconds, callback) {
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("out_time_ms=")) continue;
+    const microseconds = Number(line.slice("out_time_ms=".length));
+    if (Number.isFinite(microseconds)) callback(Math.min(1, microseconds / 1_000_000 / Math.max(0.1, durationSeconds)));
+  }
+}
+
+async function chooseEncoder(requested) {
+  const hasNvenc = await nvencAvailable();
+  if (requested === "nvidia" && !hasNvenc) throw new Error("NVIDIA NVENC was selected, but FFmpeg does not report h264_nvenc support.");
+  if (requested === "nvidia" || (requested === "auto" && hasNvenc)) {
+    return { name: "h264_nvenc", args: ["-preset", "p5", "-cq", "21"], label: "NVIDIA NVENC" };
+  }
+  return { name: "libx264", args: ["-preset", "medium", "-crf", "19"], label: "CPU / libx264" };
+}
+
+async function renderProjectVideo(project, settings, update) {
+  await requireFfmpeg();
+  const scenes = [...(project.scenes || [])].sort((a, b) => a.order - b.order);
+  if (!scenes.length) throw new Error("Add at least one scene before rendering.");
+  const resolved = scenes.map(scene => ({ scene, image: project.images.find(i => i.id === scene.imageId) }));
+  if (resolved.some(item => !item.image)) throw new Error("Every scene must have a selected image before rendering.");
+
+  const encoder = await chooseEncoder(settings.encoder);
+  const projectDir = path.join(PROJECT_FILES_DIR, project.id);
+  const renderId = crypto.randomUUID();
+  const workDir = path.join(projectDir, `.render-${renderId}`);
+  const videosDir = path.join(projectDir, "videos");
+  await fs.mkdir(workDir, { recursive: true });
+  await fs.mkdir(videosDir, { recursive: true });
+  const clips = [];
+  const durations = [];
+
+  try {
+    for (let i = 0; i < resolved.length; i++) {
+      const { scene, image } = resolved[i];
+      update({ stage: `Rendering scene ${i + 1} of ${resolved.length}`, scene: i + 1 });
+      const inputPath = path.join(projectDir, path.basename(new URL(image.url, "http://local").pathname));
+      const clip = path.join(workDir, `scene-${String(i + 1).padStart(3, "0")}.mp4`);
+      const duration = Math.max(1, Number(scene.duration) || 5);
+      const frames = Math.max(1, Math.round(duration * settings.fps));
+      const args = ["-y", "-loop", "1", "-i", inputPath, "-vf", sceneFilter(scene, frames, settings.width, settings.height, settings.fps), "-frames:v", String(frames), "-r", String(settings.fps), "-c:v", encoder.name, ...encoder.args, "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", clip];
+      await runCommand("ffmpeg", args, text => parseProgress(text, duration, ratio => {
+        update({ progress: Math.round(((i + ratio) / (resolved.length + 1)) * 100) });
+      }));
+      clips.push(clip);
+      durations.push(duration);
+    }
+
+    const filename = `stinky-video-${new Date().toISOString().replace(/[:.]/g, "-")}.mp4`;
+    const outputPath = path.join(videosDir, filename);
+    update({ stage: "Joining scenes and applying transitions", progress: Math.round(resolved.length / (resolved.length + 1) * 100) });
+
+    if (settings.transition === "cut" || clips.length === 1) {
+      const concatFile = path.join(workDir, "concat.txt");
+      await fs.writeFile(concatFile, clips.map(f => `file '${f.replaceAll("'", "'\\''")}'`).join("\n") + "\n");
+      await runCommand("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concatFile, "-c", "copy", "-movflags", "+faststart", outputPath]);
+    } else {
+      const td = Math.min(settings.transitionDuration, ...durations.map(d => Math.max(0.25, d / 3)));
+      const inputs = clips.flatMap(clip => ["-i", clip]);
+      let filters = "";
+      let previous = "0:v";
+      let cumulative = durations[0];
+      for (let i = 1; i < clips.length; i++) {
+        const output = i === clips.length - 1 ? "vout" : `v${i}`;
+        const transitionName = settings.transition === "dip-black" ? "fadeblack" : "fade";
+        const offset = Math.max(0, cumulative - td * i);
+        filters += `[${previous}][${i}:v]xfade=transition=${transitionName}:duration=${td}:offset=${offset.toFixed(3)}[${output}];`;
+        previous = output;
+        cumulative += durations[i];
+      }
+      filters = filters.replace(/;$/, "");
+      const finalDuration = durations.reduce((a, b) => a + b, 0) - td * (clips.length - 1);
+      await runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters, "-map", "[vout]", "-c:v", encoder.name, ...encoder.args, "-pix_fmt", "yuv420p", "-r", String(settings.fps), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", outputPath], text => parseProgress(text, finalDuration, ratio => update({ progress: Math.round(((resolved.length + ratio) / (resolved.length + 1)) * 100) })));
+    }
+
+    const stat = await fs.stat(outputPath);
+    const duration = durations.reduce((a, b) => a + b, 0) - (settings.transition === "cut" ? 0 : settings.transitionDuration * Math.max(0, clips.length - 1));
+    const record = {
+      id: renderId, filename,
+      url: `/generated/${encodeURIComponent(project.id)}/videos/${encodeURIComponent(filename)}`,
+      sceneCount: scenes.length, duration: Math.max(0, Number(duration.toFixed(2))),
+      width: settings.width, height: settings.height, fps: settings.fps,
+      resolution: settings.resolution, transition: settings.transition,
+      encoder: encoder.label, fileSize: stat.size,
+      createdAt: new Date().toISOString()
+    };
+    project.videos = Array.isArray(project.videos) ? project.videos : [];
+    project.videos.unshift(record);
+    project.updatedAt = record.createdAt;
+    update({ progress: 100, stage: "Complete" });
+    return record;
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true });
+  }
+}
+
 app.get("/api/health", async (_req, res) => {
   try {
     const response = await comfyFetch("/system_stats");
@@ -182,6 +355,7 @@ app.post("/api/projects", async (req, res) => {
       createdAt: now,
       updatedAt: now,
       images: [],
+      videos: [],
       scenes: []
     };
     projects.push(project);
@@ -411,6 +585,54 @@ app.post("/api/projects/:projectId/scenes/:sceneId/move", async (req, res) => {
   }
 });
 
+
+app.post("/api/projects/:id/render-video", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const settings = normalizeRenderSettings(req.body || {});
+    const jobId = crypto.randomUUID();
+    const job = { id: jobId, projectId: project.id, status: "queued", progress: 0, stage: "Queued", createdAt: new Date().toISOString() };
+    renderJobs.set(jobId, job);
+    res.status(202).json(job);
+
+    queueMicrotask(async () => {
+      try {
+        job.status = "running";
+        const video = await renderProjectVideo(project, settings, patch => Object.assign(job, patch));
+        await writeProjects(projects);
+        Object.assign(job, { status: "complete", progress: 100, stage: "Complete", video });
+      } catch (error) {
+        console.error(error);
+        Object.assign(job, { status: "error", stage: "Failed", error: error.message });
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/render-jobs/:jobId", (req, res) => {
+  const job = renderJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Render job not found." });
+  res.json(job);
+});
+
+app.delete("/api/projects/:projectId/videos/:videoId", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const index=(project.videos||[]).findIndex(v=>v.id===req.params.videoId);
+    if(index<0) return res.status(404).json({error:"Video not found."});
+    const [video]=project.videos.splice(index,1);
+    await writeProjects(projects);
+    await fs.rm(path.join(PROJECT_FILES_DIR,project.id,"videos",path.basename(video.filename)),{force:true});
+    res.status(204).end();
+  } catch(error){ res.status(500).json({error:error.message}); }
+});
+
 app.post("/api/projects/:id/generate", async (req, res) => {
   try {
     const projects = await readProjects();
@@ -474,7 +696,7 @@ app.delete("/api/projects/:projectId/images/:imageId", async (req, res) => {
 
 await ensureStorage();
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`Stinky AI Studio v0.4: http://127.0.0.1:${PORT}`);
+  console.log(`Stinky AI Studio v0.6: http://127.0.0.1:${PORT}`);
   console.log(`ComfyUI API: ${COMFY_URL}`);
   console.log(`Checkpoint: ${CHECKPOINT}`);
 });

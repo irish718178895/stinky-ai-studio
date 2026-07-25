@@ -15,6 +15,15 @@ const workspace = byId("workspace");
 const emptyState = byId("emptyState");
 const gallery = byId("gallery");
 const imageCount = byId("imageCount");
+const videoList = byId("videoList");
+const videoCount = byId("videoCount");
+const renderVideoButton = byId("renderVideoButton");
+const renderMessage = byId("renderMessage");
+const renderProgress = byId("renderProgress");
+const renderResolution = byId("renderResolution");
+const renderFps = byId("renderFps");
+const renderTransition = byId("renderTransition");
+const renderEncoder = byId("renderEncoder");
 const sceneList = byId("sceneList");
 const health = byId("health");
 const form = byId("generateForm");
@@ -157,6 +166,76 @@ function cameraMovementLabel(value) {
   })[value] || "Zoom in";
 }
 
+
+function renderVideos(project) {
+  const videos = project.videos || [];
+  videoCount.textContent = `${videos.length} video${videos.length === 1 ? "" : "s"}`;
+  videoList.innerHTML = "";
+  if (!videos.length) {
+    videoList.innerHTML = '<div class="gallery-empty">No rendered videos yet.</div>';
+    return;
+  }
+  for (const video of videos) {
+    const card=document.createElement("article"); card.className="video-card";
+    const player=document.createElement("video"); player.src=video.url; player.controls=true; player.preload="metadata";
+    const info=document.createElement("div"); info.className="card-body";
+    const title=document.createElement("strong"); title.textContent=video.filename;
+    const meta=document.createElement("p"); meta.className="card-meta"; const mb = video.fileSize ? `${(video.fileSize / 1024 / 1024).toFixed(1)} MB` : "";
+    meta.textContent = `${video.duration}s · ${video.sceneCount} scenes · ${video.width}×${video.height} · ${video.fps || 30} fps${video.transition ? ` · ${video.transition}` : ""}${video.encoder ? ` · ${video.encoder}` : ""}${mb ? ` · ${mb}` : ""}`;
+    const actions=document.createElement("div"); actions.className="card-buttons";
+    const download=document.createElement("a"); download.href=video.url; download.download=video.filename; download.className="text-button link-button"; download.textContent="Download";
+    const del=createCardButton("Delete","text-button danger-text",()=>deleteVideo(video));
+    actions.append(download,del); info.append(title,meta,actions); card.append(player,info); videoList.append(card);
+  }
+}
+
+async function renderVideo() {
+  const project = currentProject();
+  if (!project) return;
+  setBusy(renderVideoButton, true, "Rendering…");
+  renderProgress.hidden = false;
+  renderProgress.value = 0;
+  renderMessage.textContent = "Starting cinematic render…";
+  try {
+    const job = await jsonFetch(`/api/projects/${project.id}/render-video`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        resolution: renderResolution.value,
+        fps: Number(renderFps.value),
+        transition: renderTransition.value,
+        encoder: renderEncoder.value,
+        transitionDuration: 0.6
+      })
+    });
+
+    while (true) {
+      await new Promise(resolve => setTimeout(resolve, 750));
+      const status = await jsonFetch(`/api/render-jobs/${job.id}`);
+      renderProgress.value = status.progress || 0;
+      renderMessage.textContent = `${status.stage || "Rendering"} — ${status.progress || 0}%`;
+      if (status.status === "complete") {
+        renderMessage.textContent = `Finished ${status.video.filename}`;
+        await loadProjects(project.id);
+        break;
+      }
+      if (status.status === "error") throw new Error(status.error || "Video rendering failed.");
+    }
+  } catch (error) {
+    renderMessage.textContent = error.message;
+  } finally {
+    setBusy(renderVideoButton, false, "Rendering…");
+    setTimeout(() => { renderProgress.hidden = true; }, 1200);
+  }
+}
+
+async function deleteVideo(video) {
+  const project=currentProject();
+  if(!project || !confirm(`Delete ${video.filename}?`)) return;
+  await jsonFetch(`/api/projects/${project.id}/videos/${video.id}`,{method:"DELETE"});
+  await loadProjects(project.id);
+}
+
 function renderWorkspace() {
   const project = currentProject();
   if (!project) {
@@ -175,6 +254,7 @@ function renderWorkspace() {
   projectDescription.textContent = project.description || "Generate images and build this project’s visual library.";
   imageCount.textContent = `${project.images.length} image${project.images.length === 1 ? "" : "s"}`;
   renderScenes(project);
+  renderVideos(project);
   gallery.innerHTML = "";
 
   if (!project.images.length) {
@@ -482,6 +562,7 @@ byId("emptyCreateButton").addEventListener("click", () => showProjectDialog());
 byId("editProjectButton").addEventListener("click", () => showProjectDialog(currentProject()));
 byId("deleteProjectButton").addEventListener("click", deleteProject);
 byId("newSceneButton").addEventListener("click", () => showSceneDialog());
+renderVideoButton.addEventListener("click", renderVideo);
 byId("cancelProject").addEventListener("click", () => projectDialog.close());
 byId("cancelScene").addEventListener("click", () => sceneDialog.close());
 byId("closeImageDialog").addEventListener("click", () => imageDialog.close());
