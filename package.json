@@ -1,6 +1,6 @@
 {
   "name": "stinky-ai-studio",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "description": "Local AI storyboard studio with queued ComfyUI images, Piper narration, and cinematic FFmpeg rendering.",
   "type": "module",

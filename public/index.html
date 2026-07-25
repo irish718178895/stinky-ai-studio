@@ -137,6 +137,19 @@
               <span id="voiceMessage" class="message"></span>
             </div>
           </div>
+          <div class="music-studio-bar">
+            <div>
+              <p class="eyebrow">BACKGROUND MUSIC</p>
+              <strong>Upload and mix a local music track</strong>
+              <p class="muted compact-copy">MP3, WAV, M4A, AAC, OGG, or FLAC up to 30 MB.</p>
+            </div>
+            <div class="music-upload-controls">
+              <input id="musicFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
+              <button id="uploadMusicButton" class="secondary" type="button">Upload music</button>
+              <span id="musicMessage" class="message"></span>
+            </div>
+          </div>
+          <div id="musicLibrary" class="music-library"></div>
           <div class="render-settings">
             <label>Resolution
               <select id="renderResolution"><option value="720p">720p</option><option value="1080p">1080p</option></select>
@@ -151,6 +164,18 @@
               <select id="renderEncoder"><option value="auto">Auto</option><option value="cpu">CPU / libx264</option><option value="nvidia">NVIDIA NVENC</option></select>
             </label>
             <label class="checkbox-label render-audio"><input id="includeNarration" type="checkbox" checked> Include generated narration</label>
+            <label class="checkbox-label render-audio"><input id="includeMusic" type="checkbox"> Include background music</label>
+            <label>Music track
+              <select id="renderMusicTrack"><option value="">No music selected</option></select>
+            </label>
+            <label>Music volume
+              <input id="musicVolume" type="range" min="0" max="1" step="0.05" value="0.22">
+              <span id="musicVolumeLabel" class="range-value">22%</span>
+            </label>
+            <label>Fade in/out
+              <select id="musicFade"><option value="0">None</option><option value="1">1 second</option><option value="1.5" selected>1.5 seconds</option><option value="2.5">2.5 seconds</option><option value="4">4 seconds</option></select>
+            </label>
+            <label class="checkbox-label render-audio"><input id="duckMusic" type="checkbox" checked> Duck music under narration</label>
           </div>
           <div class="video-render-bar">
             <button id="renderVideoButton" class="primary" type="button">Render MP4</button>

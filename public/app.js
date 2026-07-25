@@ -49,6 +49,13 @@ const imageBatchMessage = byId("imageBatchMessage");
 const piperStatus = byId("piperStatus");
 const generateAllVoicesButton = byId("generateAllVoicesButton");
 const voiceMessage = byId("voiceMessage");
+const musicFile = byId("musicFile");
+const uploadMusicButton = byId("uploadMusicButton");
+const musicMessage = byId("musicMessage");
+const musicLibrary = byId("musicLibrary");
+const renderMusicTrack = byId("renderMusicTrack");
+const musicVolume = byId("musicVolume");
+const musicVolumeLabel = byId("musicVolumeLabel");
 
 async function jsonFetch(url, options = {}) {
   const response = await fetch(url, options);
@@ -196,7 +203,7 @@ function renderVideos(project) {
     const info=document.createElement("div"); info.className="card-body";
     const title=document.createElement("strong"); title.textContent=video.filename;
     const meta=document.createElement("p"); meta.className="card-meta"; const mb = video.fileSize ? `${(video.fileSize / 1024 / 1024).toFixed(1)} MB` : "";
-    meta.textContent = `${video.duration}s · ${video.sceneCount} scenes · ${video.width}×${video.height} · ${video.fps || 30} fps${video.transition ? ` · ${video.transition}` : ""}${video.encoder ? ` · ${video.encoder}` : ""}${video.narration ? " · narration" : ""}${mb ? ` · ${mb}` : ""}`;
+    meta.textContent = `${video.duration}s · ${video.sceneCount} scenes · ${video.width}×${video.height} · ${video.fps || 30} fps${video.transition ? ` · ${video.transition}` : ""}${video.encoder ? ` · ${video.encoder}` : ""}${video.narration ? " · narration" : ""}${video.music ? ` · music: ${video.music.name}` : ""}${mb ? ` · ${mb}` : ""}`;
     const actions=document.createElement("div"); actions.className="card-buttons";
     const download=document.createElement("a"); download.href=video.url; download.download=video.filename; download.className="text-button link-button"; download.textContent="Download";
     const del=createCardButton("Delete","text-button danger-text",()=>deleteVideo(video));
@@ -357,6 +364,96 @@ async function checkPiper() {
   }
 }
 
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the selected audio file."));
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderMusicTracks(project) {
+  const tracks = project.musicTracks || [];
+  musicLibrary.innerHTML = "";
+  renderMusicTrack.innerHTML = '<option value="">No music selected</option>';
+  for (const track of tracks) {
+    const option = document.createElement("option");
+    option.value = track.id;
+    option.textContent = track.name;
+    renderMusicTrack.append(option);
+
+    const row = document.createElement("div");
+    row.className = "music-track";
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.preload = "metadata";
+    audio.src = track.url;
+    const details = document.createElement("div");
+    details.className = "music-track-details";
+    const name = document.createElement("strong");
+    name.textContent = track.name;
+    const size = document.createElement("span");
+    size.textContent = `${(track.fileSize / 1024 / 1024).toFixed(1)} MB`;
+    details.append(name, size);
+    const select = createCardButton("Use in render", "text-button", () => {
+      renderMusicTrack.value = track.id;
+      byId("includeMusic").checked = true;
+    });
+    const remove = createCardButton("Delete", "text-button danger-text", () => deleteMusicTrack(track));
+    const actions = document.createElement("div");
+    actions.className = "music-track-actions";
+    actions.append(select, remove);
+    row.append(audio, details, actions);
+    musicLibrary.append(row);
+  }
+  if (!tracks.length) musicLibrary.innerHTML = '<div class="gallery-empty music-empty">No background music uploaded.</div>';
+}
+
+async function uploadMusic() {
+  const project = currentProject();
+  const file = musicFile.files?.[0];
+  if (!project || !file) {
+    musicMessage.textContent = "Choose an audio file first.";
+    return;
+  }
+  if (file.size > 30 * 1024 * 1024) {
+    musicMessage.textContent = "The music file must be 30 MB or smaller.";
+    return;
+  }
+  setBusy(uploadMusicButton, true, "Uploading…");
+  musicMessage.textContent = "Reading audio file…";
+  try {
+    const dataBase64 = await fileToBase64(file);
+    const track = await jsonFetch(`/api/projects/${project.id}/music`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: file.name, mimeType: file.type, dataBase64 })
+    });
+    musicMessage.textContent = `Uploaded ${track.name}`;
+    musicFile.value = "";
+    await loadProjects(project.id);
+    renderMusicTrack.value = track.id;
+    byId("includeMusic").checked = true;
+  } catch (error) {
+    musicMessage.textContent = error.message;
+  } finally {
+    setBusy(uploadMusicButton, false, "Uploading…");
+  }
+}
+
+async function deleteMusicTrack(track) {
+  const project = currentProject();
+  if (!project || !confirm(`Delete ${track.name}? Existing rendered videos are not affected.`)) return;
+  try {
+    await jsonFetch(`/api/projects/${project.id}/music/${track.id}`, { method: "DELETE" });
+    await loadProjects(project.id);
+  } catch (error) {
+    musicMessage.textContent = error.message;
+  }
+}
+
 async function renderVideo() {
   const project = currentProject();
   if (!project) return;
@@ -374,7 +471,12 @@ async function renderVideo() {
         transition: renderTransition.value,
         encoder: renderEncoder.value,
         transitionDuration: 0.6,
-        includeNarration: byId("includeNarration").checked
+        includeNarration: byId("includeNarration").checked,
+        includeMusic: byId("includeMusic").checked,
+        musicTrackId: renderMusicTrack.value || null,
+        musicVolume: Number(musicVolume.value),
+        musicFade: Number(byId("musicFade").value),
+        duckMusic: byId("duckMusic").checked
       })
     });
 
@@ -424,6 +526,7 @@ function renderWorkspace() {
   imageCount.textContent = `${project.images.length} image${project.images.length === 1 ? "" : "s"}`;
   renderScenes(project);
   renderVideos(project);
+  renderMusicTracks(project);
   gallery.innerHTML = "";
 
   if (!project.images.length) {
@@ -788,6 +891,8 @@ byId("newSceneButton").addEventListener("click", () => showSceneDialog());
 renderVideoButton.addEventListener("click", renderVideo);
 generateAllImagesButton.addEventListener("click", generateAllSceneImages);
 generateAllVoicesButton.addEventListener("click", generateAllSceneVoices);
+uploadMusicButton.addEventListener("click", uploadMusic);
+musicVolume.addEventListener("input", () => { musicVolumeLabel.textContent = `${Math.round(Number(musicVolume.value) * 100)}%`; });
 cancelImageBatchButton.addEventListener("click", cancelImageBatch);
 byId("cancelProject").addEventListener("click", () => projectDialog.close());
 byId("cancelScene").addEventListener("click", () => sceneDialog.close());

@@ -27,7 +27,7 @@ const RESOLUTIONS = {
   "1080p": { width: 1920, height: 1080 }
 };
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "40mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/generated", express.static(PROJECT_FILES_DIR));
 
@@ -61,6 +61,7 @@ function normalizeProject(project) {
     ...project,
     images,
     videos: Array.isArray(project.videos) ? project.videos : [],
+    musicTracks: Array.isArray(project.musicTracks) ? project.musicTracks : [],
     scenes: scenes
       .map((scene, index) => ({
         id: scene.id || crypto.randomUUID(),
@@ -250,7 +251,12 @@ function normalizeRenderSettings(body = {}) {
   const transitionDuration = Math.min(1.5, Math.max(0.25, Number(body.transitionDuration) || 0.6));
   const encoder = ["auto", "cpu", "nvidia"].includes(body.encoder) ? body.encoder : "auto";
   const includeNarration = body.includeNarration !== false;
-  return { resolution, fps, transition, transitionDuration, encoder, includeNarration, ...RESOLUTIONS[resolution] };
+  const includeMusic = body.includeMusic === true;
+  const musicTrackId = typeof body.musicTrackId === "string" ? body.musicTrackId : null;
+  const musicVolume = Math.min(1, Math.max(0, Number(body.musicVolume) || 0.22));
+  const duckMusic = body.duckMusic !== false;
+  const musicFade = Math.min(5, Math.max(0, Number(body.musicFade) || 1.5));
+  return { resolution, fps, transition, transitionDuration, encoder, includeNarration, includeMusic, musicTrackId, musicVolume, duckMusic, musicFade, ...RESOLUTIONS[resolution] };
 }
 
 function easeExpression() {
@@ -295,6 +301,47 @@ async function chooseEncoder(requested) {
     return { name: "h264_nvenc", args: ["-preset", "p5", "-cq", "21"], label: "NVIDIA NVENC" };
   }
   return { name: "libx264", args: ["-preset", "medium", "-crf", "19"], label: "CPU / libx264" };
+}
+
+
+function safeMusicExtension(filename, mimeType) {
+  const extension = path.extname(filename || "").toLowerCase();
+  const allowed = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"]);
+  if (allowed.has(extension)) return extension;
+  if (mimeType === "audio/mpeg") return ".mp3";
+  if (mimeType === "audio/wav" || mimeType === "audio/x-wav") return ".wav";
+  if (mimeType === "audio/mp4") return ".m4a";
+  if (mimeType === "audio/ogg") return ".ogg";
+  if (mimeType === "audio/flac") return ".flac";
+  throw new Error("Unsupported music format. Use MP3, WAV, M4A, AAC, OGG, or FLAC.");
+}
+
+async function mixBackgroundMusic({ baseVideoPath, outputPath, musicPath, duration, settings, update }) {
+  const fade = Math.min(settings.musicFade, Math.max(0, duration / 3));
+  const fadeOutStart = Math.max(0, duration - fade);
+  const musicPrep = [
+    `volume=${settings.musicVolume}`,
+    fade > 0 ? `afade=t=in:st=0:d=${fade}` : null,
+    fade > 0 ? `afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fade}` : null,
+    `atrim=0:${duration}`,
+    "asetpts=N/SR/TB"
+  ].filter(Boolean).join(",");
+
+  let filter;
+  if (settings.duckMusic && settings.includeNarration) {
+    filter = `[1:a]${musicPrep}[music];[music][0:a]sidechaincompress=threshold=0.025:ratio=10:attack=20:release=650[ducked];[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`;
+  } else {
+    filter = `[1:a]${musicPrep}[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`;
+  }
+
+  update({ stage: "Mixing background music", progress: 96 });
+  await runCommand("ffmpeg", [
+    "-y", "-i", baseVideoPath, "-stream_loop", "-1", "-i", musicPath,
+    "-filter_complex", filter,
+    "-map", "0:v:0", "-map", "[aout]",
+    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+    "-t", String(duration), "-movflags", "+faststart", outputPath
+  ]);
 }
 
 async function renderProjectVideo(project, settings, update) {
@@ -344,12 +391,13 @@ async function renderProjectVideo(project, settings, update) {
 
     const filename = `stinky-video-${new Date().toISOString().replace(/[:.]/g, "-")}.mp4`;
     const outputPath = path.join(videosDir, filename);
+    const baseOutputPath = settings.includeMusic ? path.join(workDir, "video-with-narration.mp4") : outputPath;
     update({ stage: "Joining scenes and applying transitions", progress: Math.round(resolved.length / (resolved.length + 1) * 100) });
 
     if (settings.transition === "cut" || clips.length === 1) {
       const concatFile = path.join(workDir, "concat.txt");
       await fs.writeFile(concatFile, clips.map(f => `file '${f.replaceAll("'", "'\\''")}'`).join("\n") + "\n");
-      await runCommand("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concatFile, "-c", "copy", "-movflags", "+faststart", outputPath]);
+      await runCommand("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concatFile, "-c", "copy", "-movflags", "+faststart", baseOutputPath]);
     } else {
       const td = Math.min(settings.transitionDuration, ...durations.map(d => Math.max(0.25, d / 3)));
       const inputs = clips.flatMap(clip => ["-i", clip]);
@@ -370,18 +418,27 @@ async function renderProjectVideo(project, settings, update) {
       }
       filters = filters.replace(/;$/, "");
       const finalDuration = durations.reduce((a, b) => a + b, 0) - td * (clips.length - 1);
-      await runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters, "-map", "[vout]", "-map", "[aout]", "-c:v", encoder.name, ...encoder.args, "-c:a", "aac", "-b:a", "160k", "-pix_fmt", "yuv420p", "-r", String(settings.fps), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", outputPath], text => parseProgress(text, finalDuration, ratio => update({ progress: Math.round(((resolved.length + ratio) / (resolved.length + 1)) * 100) })));
+      await runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters, "-map", "[vout]", "-map", "[aout]", "-c:v", encoder.name, ...encoder.args, "-c:a", "aac", "-b:a", "160k", "-pix_fmt", "yuv420p", "-r", String(settings.fps), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", baseOutputPath], text => parseProgress(text, finalDuration, ratio => update({ progress: Math.round(((resolved.length + ratio) / (resolved.length + 1)) * 100) })));
     }
 
-    const stat = await fs.stat(outputPath);
     const duration = durations.reduce((a, b) => a + b, 0) - (settings.transition === "cut" ? 0 : settings.transitionDuration * Math.max(0, clips.length - 1));
+    let musicRecord = null;
+    if (settings.includeMusic) {
+      musicRecord = (project.musicTracks || []).find(track => track.id === settings.musicTrackId);
+      if (!musicRecord) throw new Error("Select a background music track before rendering.");
+      const musicPath = path.join(projectDir, "music", path.basename(new URL(musicRecord.url, "http://local").pathname));
+      await mixBackgroundMusic({ baseVideoPath: baseOutputPath, outputPath, musicPath, duration, settings, update });
+    }
+    const stat = await fs.stat(outputPath);
     const record = {
       id: renderId, filename,
       url: `/generated/${encodeURIComponent(project.id)}/videos/${encodeURIComponent(filename)}`,
       sceneCount: scenes.length, duration: Math.max(0, Number(duration.toFixed(2))),
       width: settings.width, height: settings.height, fps: settings.fps,
       resolution: settings.resolution, transition: settings.transition,
-      encoder: encoder.label, narration: settings.includeNarration, fileSize: stat.size,
+      encoder: encoder.label, narration: settings.includeNarration,
+      music: musicRecord ? { id: musicRecord.id, name: musicRecord.name, volume: settings.musicVolume, ducking: settings.duckMusic } : null,
+      fileSize: stat.size,
       createdAt: new Date().toISOString()
     };
     project.videos = Array.isArray(project.videos) ? project.videos : [];
@@ -449,6 +506,55 @@ app.post("/api/projects/:projectId/generate-scene-voices", async (req, res) => {
     res.json({ generated: results.filter(item => item.ok).length, total: results.length, results });
   } catch (error) {
     console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+app.post("/api/projects/:projectId/music", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const filename = String(req.body.filename || "music").slice(0, 180);
+    const mimeType = String(req.body.mimeType || "");
+    const encoded = String(req.body.dataBase64 || "");
+    if (!encoded) return res.status(400).json({ error: "No audio data was supplied." });
+    const buffer = Buffer.from(encoded, "base64");
+    if (!buffer.length || buffer.length > 30 * 1024 * 1024) return res.status(400).json({ error: "Music file must be between 1 byte and 30 MB." });
+    const extension = safeMusicExtension(filename, mimeType);
+    const id = crypto.randomUUID();
+    const musicDir = path.join(PROJECT_FILES_DIR, project.id, "music");
+    await fs.mkdir(musicDir, { recursive: true });
+    const storedName = `${id}${extension}`;
+    await fs.writeFile(path.join(musicDir, storedName), buffer);
+    const now = new Date().toISOString();
+    const record = { id, name: path.basename(filename), mimeType, fileSize: buffer.length, url: `/generated/${encodeURIComponent(project.id)}/music/${encodeURIComponent(storedName)}`, createdAt: now };
+    project.musicTracks = Array.isArray(project.musicTracks) ? project.musicTracks : [];
+    project.musicTracks.unshift(record);
+    project.updatedAt = now;
+    await writeProjects(projects);
+    res.status(201).json(record);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/projects/:projectId/music/:musicId", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const index = (project.musicTracks || []).findIndex(item => item.id === req.params.musicId);
+    if (index < 0) return res.status(404).json({ error: "Music track not found." });
+    const [track] = project.musicTracks.splice(index, 1);
+    const storedPath = path.join(PROJECT_FILES_DIR, project.id, "music", path.basename(new URL(track.url, "http://local").pathname));
+    await fs.rm(storedPath, { force: true });
+    project.updatedAt = new Date().toISOString();
+    await writeProjects(projects);
+    res.status(204).end();
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
@@ -539,6 +645,7 @@ app.post("/api/projects", async (req, res) => {
       updatedAt: now,
       images: [],
       videos: [],
+      musicTracks: [],
       scenes: []
     };
     projects.push(project);
@@ -1056,7 +1163,7 @@ app.delete("/api/projects/:projectId/images/:imageId", async (req, res) => {
 
 await ensureStorage();
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`Stinky AI Studio v0.9: http://127.0.0.1:${PORT}`);
+  console.log(`Stinky AI Studio v0.10: http://127.0.0.1:${PORT}`);
   console.log(`ComfyUI API: ${COMFY_URL}`);
   console.log(`Checkpoint: ${CHECKPOINT}`);
   console.log(`Ollama: ${OLLAMA_URL} (${OLLAMA_MODEL})`);
