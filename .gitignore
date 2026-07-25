@@ -3,3 +3,14 @@ node_modules/
 npm-debug.log*
 data/projects.json
 data/projects/
+
+# Local generated content
+data/projects/
+data/projects.json
+
+# Local AI models and outputs
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+output/
