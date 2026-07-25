@@ -3,7 +3,8 @@ const state = {
   selectedId: null,
   editingProjectId: null,
   editingSceneId: null,
-  dialogImage: null
+  dialogImage: null,
+  imageJobId: null
 };
 
 const byId = id => document.querySelector(`#${id}`);
@@ -36,6 +37,14 @@ const sceneDialog = byId("sceneDialog");
 const sceneForm = byId("sceneForm");
 const sceneError = byId("sceneError");
 const imageDialog = byId("imageDialog");
+const storyboardForm = byId("storyboardForm");
+const storyboardMessage = byId("storyboardMessage");
+const generateStoryboardButton = byId("generateStoryboardButton");
+const ollamaStatus = byId("ollamaStatus");
+const generateAllImagesButton = byId("generateAllImagesButton");
+const cancelImageBatchButton = byId("cancelImageBatchButton");
+const imageBatchProgress = byId("imageBatchProgress");
+const imageBatchMessage = byId("imageBatchMessage");
 
 async function jsonFetch(url, options = {}) {
   const response = await fetch(url, options);
@@ -131,7 +140,7 @@ function renderScenes(project) {
     title.textContent = scene.title;
     const badges = document.createElement("div");
     badges.className = "scene-badges";
-    badges.innerHTML = `<span>${scene.duration}s</span><span>${cameraMovementLabel(scene.cameraMovement)}</span>`;
+    badges.innerHTML = `<span>${scene.duration}s</span><span>${cameraMovementLabel(scene.cameraMovement)}</span><span class="${selectedImage ? "scene-ready" : "scene-missing"}">${selectedImage ? "Image ready" : "Needs image"}</span>`;
     heading.append(title, badges);
 
     const description = document.createElement("p");
@@ -144,6 +153,7 @@ function renderScenes(project) {
     const controls = document.createElement("div");
     controls.className = "scene-controls";
     controls.append(
+      createCardButton("Use prompt", "text-button", () => loadScenePrompt(scene)),
       createCardButton("Edit", "text-button", () => showSceneDialog(scene)),
       createCardButton("Move up", "text-button", () => moveScene(scene, "up"), index === 0),
       createCardButton("Move down", "text-button", () => moveScene(scene, "down"), index === scenes.length - 1),
@@ -186,6 +196,91 @@ function renderVideos(project) {
     const download=document.createElement("a"); download.href=video.url; download.download=video.filename; download.className="text-button link-button"; download.textContent="Download";
     const del=createCardButton("Delete","text-button danger-text",()=>deleteVideo(video));
     actions.append(download,del); info.append(title,meta,actions); card.append(player,info); videoList.append(card);
+  }
+}
+
+
+
+function batchGenerationPayload() {
+  return {
+    onlyMissing: !byId("regenerateAssignedImages").checked,
+    negativePrompt: byId("negativePrompt").value,
+    width: Number(byId("width").value),
+    height: Number(byId("height").value),
+    steps: Number(byId("steps").value),
+    cfg: Number(byId("cfg").value)
+  };
+}
+
+function describeImageJob(job) {
+  const current = job.scenes?.find(item => item.sceneId === job.currentSceneId);
+  const suffix = current ? ` — ${current.title}` : "";
+  return `${job.stage || "Generating"}${suffix} — ${job.completed || 0}/${job.total || 0} scenes`;
+}
+
+async function generateAllSceneImages() {
+  const project = currentProject();
+  if (!project) return;
+  const includeAssigned = byId("regenerateAssignedImages").checked;
+  const eligible = (project.scenes || []).filter(scene => includeAssigned || !scene.imageId);
+  if (!eligible.length) {
+    imageBatchMessage.textContent = "Every scene already has an image.";
+    return;
+  }
+  if (includeAssigned && !confirm(`Regenerate and replace the assigned image for ${eligible.length} scene(s)? Existing images stay in the gallery.`)) return;
+
+  setBusy(generateAllImagesButton, true, "Generating scene images…");
+  cancelImageBatchButton.hidden = false;
+  imageBatchProgress.hidden = false;
+  imageBatchProgress.value = 0;
+  imageBatchMessage.textContent = `Queuing ${eligible.length} scene(s)…`;
+
+  try {
+    const job = await jsonFetch(`/api/projects/${project.id}/generate-scene-images`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(batchGenerationPayload())
+    });
+    state.imageJobId = job.id;
+
+    while (state.imageJobId === job.id) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const status = await jsonFetch(`/api/image-jobs/${job.id}`);
+      imageBatchProgress.value = status.progress || 0;
+      imageBatchMessage.textContent = describeImageJob(status);
+      if (["complete", "complete-with-errors", "cancelled", "error"].includes(status.status)) {
+        if (status.status === "error") throw new Error(status.error || "Scene image generation failed.");
+        const failures = (status.scenes || []).filter(item => item.status === "error");
+        imageBatchMessage.textContent = status.status === "cancelled"
+          ? `Cancelled after ${status.completed}/${status.total} scenes.`
+          : failures.length
+            ? `Finished with ${failures.length} failed scene(s). Edit their prompts and run again.`
+            : `Generated and assigned ${status.completed} scene image(s).`;
+        await loadProjects(project.id);
+        break;
+      }
+    }
+  } catch (error) {
+    imageBatchMessage.textContent = error.message;
+  } finally {
+    state.imageJobId = null;
+    setBusy(generateAllImagesButton, false, "Generating scene images…");
+    cancelImageBatchButton.hidden = true;
+    setTimeout(() => { imageBatchProgress.hidden = true; }, 1500);
+    checkHealth();
+  }
+}
+
+async function cancelImageBatch() {
+  if (!state.imageJobId) return;
+  cancelImageBatchButton.disabled = true;
+  imageBatchMessage.textContent = "Cancellation requested. The current ComfyUI image will finish first…";
+  try {
+    await jsonFetch(`/api/image-jobs/${state.imageJobId}/cancel`, { method: "POST" });
+  } catch (error) {
+    imageBatchMessage.textContent = error.message;
+  } finally {
+    cancelImageBatchButton.disabled = false;
   }
 }
 
@@ -378,6 +473,7 @@ function showSceneDialog(scene = null) {
   byId("saveSceneButton").textContent = scene ? "Save scene" : "Add scene";
   byId("sceneTitle").value = scene?.title || `Scene ${(project.scenes?.length || 0) + 1}`;
   byId("sceneDescription").value = scene?.description || "";
+  byId("sceneImagePrompt").value = scene?.imagePrompt || scene?.description || "";
   byId("sceneNarration").value = scene?.narration || "";
   byId("sceneDuration").value = scene?.duration || 5;
   byId("sceneCameraMovement").value = scene?.cameraMovement || "zoom-in";
@@ -395,6 +491,7 @@ async function saveScene(event) {
   const payload = {
     title: byId("sceneTitle").value,
     description: byId("sceneDescription").value,
+    imagePrompt: byId("sceneImagePrompt").value,
     narration: byId("sceneNarration").value,
     duration: Number(byId("sceneDuration").value),
     cameraMovement: byId("sceneCameraMovement").value,
@@ -443,6 +540,58 @@ async function moveScene(scene, direction) {
     await loadProjects(project.id);
   } catch (error) {
     alert(error.message);
+  }
+}
+
+function loadScenePrompt(scene) {
+  const promptText = scene?.imagePrompt || scene?.description || "";
+  if (!promptText) {
+    storyboardMessage.textContent = "That scene does not have an image prompt yet.";
+    return;
+  }
+  byId("prompt").value = promptText;
+  message.textContent = `Loaded image prompt from “${scene.title}”.`;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function checkOllama() {
+  try {
+    const status = await jsonFetch("/api/ollama/health");
+    ollamaStatus.textContent = status.installed ? `${status.model} ready` : `${status.model} not pulled`;
+    ollamaStatus.className = status.installed ? "status ok" : "status bad";
+  } catch {
+    ollamaStatus.textContent = "Ollama offline";
+    ollamaStatus.className = "status bad";
+  }
+}
+
+async function generateStoryboard(event) {
+  event.preventDefault();
+  const project = currentProject();
+  if (!project) return;
+  if (project.scenes?.length && byId("storyboardReplace").checked && !confirm("Replace all existing scenes with a new AI storyboard? Existing images will remain in the project gallery.")) return;
+  setBusy(generateStoryboardButton, true, "Directing…");
+  storyboardMessage.textContent = "The local model is writing the storyboard…";
+  try {
+    const result = await jsonFetch(`/api/projects/${project.id}/storyboard`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        idea: byId("storyboardIdea").value,
+        length: Number(byId("storyboardLength").value),
+        style: byId("storyboardStyle").value,
+        audience: byId("storyboardAudience").value,
+        model: byId("storyboardModel").value,
+        replaceExisting: byId("storyboardReplace").checked
+      })
+    });
+    storyboardMessage.textContent = `Created ${result.scenes.length} scenes: ${result.storyboard.title}`;
+    await loadProjects(project.id);
+  } catch (error) {
+    storyboardMessage.textContent = error.message;
+  } finally {
+    setBusy(generateStoryboardButton, false, "Directing…");
+    checkOllama();
   }
 }
 
@@ -563,6 +712,8 @@ byId("editProjectButton").addEventListener("click", () => showProjectDialog(curr
 byId("deleteProjectButton").addEventListener("click", deleteProject);
 byId("newSceneButton").addEventListener("click", () => showSceneDialog());
 renderVideoButton.addEventListener("click", renderVideo);
+generateAllImagesButton.addEventListener("click", generateAllSceneImages);
+cancelImageBatchButton.addEventListener("click", cancelImageBatch);
 byId("cancelProject").addEventListener("click", () => projectDialog.close());
 byId("cancelScene").addEventListener("click", () => sceneDialog.close());
 byId("closeImageDialog").addEventListener("click", () => imageDialog.close());
@@ -577,5 +728,11 @@ byId("deleteDialogImageButton").addEventListener("click", () => state.dialogImag
 projectForm.addEventListener("submit", saveProject);
 sceneForm.addEventListener("submit", saveScene);
 form.addEventListener("submit", generateImage);
+storyboardForm.addEventListener("submit", generateStoryboard);
+byId("loadFirstPromptButton").addEventListener("click", () => {
+  const first = [...(currentProject()?.scenes || [])].sort((a,b) => a.order-b.order)[0];
+  if (first) loadScenePrompt(first);
+  else storyboardMessage.textContent = "Generate or add a scene first.";
+});
 
-await Promise.all([loadProjects(), checkHealth()]);
+await Promise.all([loadProjects(), checkHealth(), checkOllama()]);

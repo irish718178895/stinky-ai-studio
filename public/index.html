@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Stinky AI Studio</title>
+  <title>Stinky AI Studio v0.8</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -65,6 +65,39 @@
         </section>
 
 
+
+        <section class="panel storyboard-panel">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">LOCAL AI DIRECTOR</p>
+              <h3>Storyboard generator</h3>
+            </div>
+            <span id="ollamaStatus" class="status">Checking Ollama…</span>
+          </div>
+          <p class="muted">Turn one commercial idea into an ordered scene plan with image prompts, narration, timing, and camera movement.</p>
+          <form id="storyboardForm">
+            <label>Commercial idea
+              <textarea id="storyboardIdea" rows="4" required placeholder="A railroad worker starts before sunrise, works through rain and smoke, and ends the day proudly wearing Stinky McGee gear."></textarea>
+            </label>
+            <div class="storyboard-settings">
+              <label>Length
+                <select id="storyboardLength"><option value="15">15 seconds</option><option value="30" selected>30 seconds</option><option value="60">60 seconds</option></select>
+              </label>
+              <label>Style
+                <select id="storyboardStyle"><option value="cinematic">Cinematic</option><option value="industrial">Industrial</option><option value="documentary">Documentary</option><option value="dramatic">Dramatic</option><option value="funny">Funny</option></select>
+              </label>
+              <label>Audience<input id="storyboardAudience" value="Blue-collar workers" maxlength="120"></label>
+              <label>Ollama model<input id="storyboardModel" value="qwen2.5:3b" maxlength="120"></label>
+            </div>
+            <label class="checkbox-label"><input id="storyboardReplace" type="checkbox" checked> Replace existing scenes</label>
+            <div class="actions">
+              <button id="generateStoryboardButton" class="primary" type="submit">Generate storyboard</button>
+              <button id="loadFirstPromptButton" class="secondary" type="button">Load first scene prompt</button>
+              <p id="storyboardMessage" class="message"></p>
+            </div>
+          </form>
+        </section>
+
         <section class="scene-section">
           <div class="section-title">
             <div>
@@ -74,6 +107,15 @@
             <button id="newSceneButton" class="primary small" type="button">+ Add scene</button>
           </div>
           <p class="muted scene-help">Assign an image, duration, and camera movement to every scene, then render a cinematic local MP4.</p>
+          <div class="batch-image-bar">
+            <button id="generateAllImagesButton" class="primary" type="button">Generate missing scene images</button>
+            <button id="cancelImageBatchButton" class="secondary" type="button" hidden>Cancel after current scene</button>
+            <label class="checkbox-label compact"><input id="regenerateAssignedImages" type="checkbox"> Regenerate scenes that already have images</label>
+            <div class="render-progress-wrap">
+              <progress id="imageBatchProgress" max="100" value="0" hidden></progress>
+              <span id="imageBatchMessage" class="message"></span>
+            </div>
+          </div>
           <div id="sceneList" class="scene-list"></div>
           <div class="render-settings">
             <label>Resolution
@@ -139,6 +181,7 @@
       </div>
       <label>Scene title<input id="sceneTitle" maxlength="100" required placeholder="Opening hero shot"></label>
       <label>Visual notes<textarea id="sceneDescription" rows="3" maxlength="500" placeholder="Worker walks toward camera through rail-yard smoke"></textarea></label>
+      <label>Image generation prompt<textarea id="sceneImagePrompt" rows="5" maxlength="4000" placeholder="Detailed Stable Diffusion prompt for this scene"></textarea></label>
       <label>Narration<textarea id="sceneNarration" rows="4" maxlength="2000" placeholder="Hard work does not ask for permission."></textarea></label>
       <div class="scene-settings">
         <label>Duration (seconds)<input id="sceneDuration" type="number" min="1" max="60" step="0.5" value="5"></label>

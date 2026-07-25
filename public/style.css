@@ -202,3 +202,30 @@ select:focus { outline: 2px solid #c97b2b; border-color: transparent; }
 .render-progress-wrap progress { width:100%; height:12px; }
 @media (max-width:850px) { .render-settings { grid-template-columns:repeat(2,1fr); } }
 @media (max-width:520px) { .render-settings { grid-template-columns:1fr; } }
+
+/* v0.7 AI storyboard director */
+.storyboard-panel { margin-bottom: 1.25rem; }
+.storyboard-settings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .9rem; margin-top: .9rem; }
+.checkbox-label { display: flex; align-items: center; gap: .55rem; margin-top: .85rem; font-weight: 600; }
+.checkbox-label input { width: auto; }
+.storyboard-panel .section-title { align-items: center; }
+.storyboard-panel textarea { min-height: 110px; }
+@media (max-width: 980px) { .storyboard-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .storyboard-settings { grid-template-columns: 1fr; } }
+
+.batch-image-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  margin: 1rem 0;
+  border: 1px solid var(--border, #333);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.025);
+}
+.batch-image-bar .render-progress-wrap { flex: 1 1 280px; }
+.batch-image-bar progress { width: 100%; }
+.checkbox-label.compact { margin: 0; white-space: nowrap; }
+.scene-ready { color: #9fe3ac; border-color: rgba(87, 190, 111, 0.45) !important; }
+.scene-missing { color: #f1bd78; border-color: rgba(224, 146, 49, 0.45) !important; }

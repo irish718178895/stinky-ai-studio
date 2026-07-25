@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { generateStoryboard } from "./modules/storyboard.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,10 +13,13 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const COMFY_URL = (process.env.COMFY_URL || "http://127.0.0.1:8188").replace(/\/$/, "");
 const CHECKPOINT = process.env.CHECKPOINT || "dreamshaper_8.safetensors";
+const OLLAMA_URL = (process.env.OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:3b";
 const DATA_DIR = path.join(__dirname, "data");
 const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 const PROJECT_FILES_DIR = path.join(DATA_DIR, "projects");
 const renderJobs = new Map();
+const imageJobs = new Map();
 const RESOLUTIONS = {
   "720p": { width: 1280, height: 720 },
   "1080p": { width: 1920, height: 1080 }
@@ -60,6 +64,7 @@ function normalizeProject(project) {
         id: scene.id || crypto.randomUUID(),
         title: String(scene.title || `Scene ${index + 1}`).slice(0, 100),
         description: String(scene.description || "").slice(0, 500),
+        imagePrompt: String(scene.imagePrompt || scene.prompt || scene.description || "").slice(0, 4000),
         narration: String(scene.narration || "").slice(0, 2000),
         duration: Math.min(60, Math.max(1, Number(scene.duration) || 5)),
         cameraMovement: ["none", "zoom-in", "zoom-out", "pan-left", "pan-right"].includes(scene.cameraMovement)
@@ -332,6 +337,68 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
+app.get("/api/ollama/health", async (_req, res) => {
+  try {
+    const response = await fetch(`${OLLAMA_URL}/api/tags`);
+    if (!response.ok) throw new Error(`Ollama ${response.status}`);
+    const data = await response.json();
+    const models = (data.models || []).map(item => item.name);
+    res.json({ ok: true, url: OLLAMA_URL, model: OLLAMA_MODEL, installed: models.includes(OLLAMA_MODEL), models });
+  } catch (error) {
+    res.status(503).json({ ok: false, url: OLLAMA_URL, model: OLLAMA_MODEL, error: error.message });
+  }
+});
+
+app.post("/api/projects/:id/storyboard", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+    const idea = String(req.body.idea || "").trim();
+    if (!idea) return res.status(400).json({ error: "Commercial idea is required." });
+    const storyboard = await generateStoryboard({
+      ollamaUrl: OLLAMA_URL,
+      model: String(req.body.model || OLLAMA_MODEL),
+      idea,
+      length: Number(req.body.length) || 30,
+      style: String(req.body.style || "cinematic"),
+      audience: String(req.body.audience || "general audience")
+    });
+    const now = new Date().toISOString();
+    const newScenes = storyboard.scenes.map((scene, index) => ({
+      id: crypto.randomUUID(),
+      title: scene.title,
+      description: scene.description,
+      imagePrompt: scene.imagePrompt,
+      narration: scene.narration,
+      duration: scene.duration,
+      cameraMovement: scene.cameraMovement,
+      imageId: null,
+      order: index,
+      createdAt: now,
+      updatedAt: now
+    }));
+    if (req.body.replaceExisting === false) {
+      const offset = project.scenes.length;
+      newScenes.forEach((scene, index) => { scene.order = offset + index; });
+      project.scenes.push(...newScenes);
+    } else {
+      project.scenes = newScenes;
+    }
+    project.storyboard = {
+      idea, length: Number(req.body.length) || 30, style: String(req.body.style || "cinematic"),
+      audience: String(req.body.audience || "general audience"), model: String(req.body.model || OLLAMA_MODEL),
+      title: storyboard.title, summary: storyboard.summary, generatedAt: now
+    };
+    project.updatedAt = now;
+    await writeProjects(projects);
+    res.status(201).json({ storyboard: project.storyboard, scenes: newScenes });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get("/api/projects", async (_req, res) => {
   try {
     const projects = await readProjects();
@@ -484,6 +551,7 @@ app.post("/api/projects/:id/scenes", async (req, res) => {
       id: crypto.randomUUID(),
       title,
       description: String(req.body.description || "").trim().slice(0, 500),
+      imagePrompt: String(req.body.imagePrompt || req.body.description || "").trim().slice(0, 4000),
       narration: String(req.body.narration || "").trim().slice(0, 2000),
       duration: Math.min(60, Math.max(1, Number(req.body.duration) || 5)),
       cameraMovement: ["none", "zoom-in", "zoom-out", "pan-left", "pan-right"].includes(req.body.cameraMovement)
@@ -518,6 +586,7 @@ app.patch("/api/projects/:projectId/scenes/:sceneId", async (req, res) => {
       scene.title = title;
     }
     if (req.body.description !== undefined) scene.description = String(req.body.description).trim().slice(0, 500);
+    if (req.body.imagePrompt !== undefined) scene.imagePrompt = String(req.body.imagePrompt).trim().slice(0, 4000);
     if (req.body.narration !== undefined) scene.narration = String(req.body.narration).trim().slice(0, 2000);
     if (req.body.duration !== undefined) scene.duration = Math.min(60, Math.max(1, Number(req.body.duration) || 5));
     if (req.body.cameraMovement !== undefined) {
@@ -585,6 +654,173 @@ app.post("/api/projects/:projectId/scenes/:sceneId/move", async (req, res) => {
   }
 });
 
+
+
+
+function publicImageJob(job) {
+  return {
+    id: job.id,
+    projectId: job.projectId,
+    status: job.status,
+    progress: job.progress,
+    stage: job.stage,
+    currentSceneId: job.currentSceneId || null,
+    completed: job.completed || 0,
+    total: job.total || 0,
+    cancelled: Boolean(job.cancelled),
+    error: job.error || null,
+    scenes: job.scenes || [],
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt
+  };
+}
+
+async function runSceneImageJob(job, defaults) {
+  try {
+    job.status = "running";
+    job.stage = "Preparing scene queue";
+    job.updatedAt = new Date().toISOString();
+
+    for (let index = 0; index < job.sceneIds.length; index++) {
+      if (job.cancelRequested) {
+        job.cancelled = true;
+        job.status = "cancelled";
+        job.stage = "Cancelled after current scene";
+        job.updatedAt = new Date().toISOString();
+        return;
+      }
+
+      const projects = await readProjects();
+      const project = projects.find(item => item.id === job.projectId);
+      if (!project) throw new Error("Project was deleted while image generation was running.");
+      const scene = project.scenes.find(item => item.id === job.sceneIds[index]);
+      const item = job.scenes.find(entry => entry.sceneId === job.sceneIds[index]);
+      if (!scene) {
+        item.status = "skipped";
+        item.error = "Scene no longer exists.";
+        job.completed += 1;
+        continue;
+      }
+
+      const prompt = String(scene.imagePrompt || scene.description || "").trim();
+      if (!prompt) {
+        item.status = "error";
+        item.error = "Scene has no image prompt.";
+        job.completed += 1;
+        continue;
+      }
+
+      job.currentSceneId = scene.id;
+      job.stage = `Generating scene ${index + 1} of ${job.total}: ${scene.title}`;
+      item.status = "running";
+      job.updatedAt = new Date().toISOString();
+
+      try {
+        const result = await generateForProject(projects, project, { ...defaults, prompt });
+        const generated = result.images[0];
+        const refreshedProjects = await readProjects();
+        const refreshedProject = refreshedProjects.find(entry => entry.id === job.projectId);
+        const refreshedScene = refreshedProject?.scenes.find(entry => entry.id === scene.id);
+        if (refreshedScene && generated) {
+          refreshedScene.imageId = generated.id;
+          refreshedScene.updatedAt = new Date().toISOString();
+          refreshedProject.updatedAt = refreshedScene.updatedAt;
+          await writeProjects(refreshedProjects);
+        }
+        item.status = "complete";
+        item.imageId = generated?.id || null;
+        item.seed = result.seed;
+      } catch (error) {
+        item.status = "error";
+        item.error = error.message;
+      }
+
+      job.completed += 1;
+      job.progress = Math.round((job.completed / Math.max(1, job.total)) * 100);
+      job.updatedAt = new Date().toISOString();
+    }
+
+    job.currentSceneId = null;
+    const failures = job.scenes.filter(item => item.status === "error").length;
+    job.status = failures ? "complete-with-errors" : "complete";
+    job.stage = failures ? `Complete with ${failures} failed scene${failures === 1 ? "" : "s"}` : "All scene images complete";
+    job.progress = 100;
+    job.updatedAt = new Date().toISOString();
+  } catch (error) {
+    console.error(error);
+    job.status = "error";
+    job.stage = "Batch generation failed";
+    job.error = error.message;
+    job.updatedAt = new Date().toISOString();
+  }
+}
+
+
+
+app.post("/api/projects/:id/generate-scene-images", async (req, res) => {
+  try {
+    const projects = await readProjects();
+    const project = projects.find(item => item.id === req.params.id);
+    if (!project) return res.status(404).json({ error: "Project not found." });
+
+    const onlyMissing = req.body?.onlyMissing !== false;
+    const requestedSceneIds = Array.isArray(req.body?.sceneIds) ? new Set(req.body.sceneIds.map(String)) : null;
+    const scenes = [...(project.scenes || [])]
+      .sort((a, b) => a.order - b.order)
+      .filter(scene => (!requestedSceneIds || requestedSceneIds.has(scene.id)) && (!onlyMissing || !scene.imageId));
+
+    if (!scenes.length) return res.status(400).json({ error: onlyMissing ? "Every selected scene already has an image." : "No scenes were selected." });
+    const missingPrompt = scenes.find(scene => !String(scene.imagePrompt || scene.description || "").trim());
+    if (missingPrompt) return res.status(400).json({ error: `Scene “${missingPrompt.title}” has no image prompt.` });
+
+    const jobId = crypto.randomUUID();
+    const job = {
+      id: jobId,
+      projectId: project.id,
+      status: "queued",
+      progress: 0,
+      stage: "Queued",
+      completed: 0,
+      total: scenes.length,
+      sceneIds: scenes.map(scene => scene.id),
+      scenes: scenes.map(scene => ({ sceneId: scene.id, title: scene.title, status: "queued", imageId: null, seed: null, error: null })),
+      cancelRequested: false,
+      cancelled: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    imageJobs.set(jobId, job);
+
+    const defaults = {
+      negativePrompt: String(req.body?.negativePrompt || "cartoon, anime, illustration, CGI, blurry, low quality, watermark, logo, text, duplicate person, deformed hands, extra fingers"),
+      width: Math.min(768, Math.max(256, Number(req.body?.width) || 512)),
+      height: Math.min(768, Math.max(256, Number(req.body?.height) || 512)),
+      steps: Math.min(40, Math.max(1, Number(req.body?.steps) || 20)),
+      cfg: Math.min(15, Math.max(1, Number(req.body?.cfg) || 7))
+    };
+
+    res.status(202).json(publicImageJob(job));
+    queueMicrotask(() => runSceneImageJob(job, defaults));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/image-jobs/:jobId", (req, res) => {
+  const job = imageJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Image job not found." });
+  res.json(publicImageJob(job));
+});
+
+app.post("/api/image-jobs/:jobId/cancel", (req, res) => {
+  const job = imageJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Image job not found." });
+  if (["complete", "complete-with-errors", "cancelled", "error"].includes(job.status)) return res.json(publicImageJob(job));
+  job.cancelRequested = true;
+  job.stage = "Cancellation requested; finishing current scene";
+  job.updatedAt = new Date().toISOString();
+  res.json(publicImageJob(job));
+});
 
 app.post("/api/projects/:id/render-video", async (req, res) => {
   try {
@@ -696,7 +932,8 @@ app.delete("/api/projects/:projectId/images/:imageId", async (req, res) => {
 
 await ensureStorage();
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`Stinky AI Studio v0.6: http://127.0.0.1:${PORT}`);
+  console.log(`Stinky AI Studio v0.8: http://127.0.0.1:${PORT}`);
   console.log(`ComfyUI API: ${COMFY_URL}`);
   console.log(`Checkpoint: ${CHECKPOINT}`);
+  console.log(`Ollama: ${OLLAMA_URL} (${OLLAMA_MODEL})`);
 });
