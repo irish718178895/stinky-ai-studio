@@ -1,4 +1,10 @@
-const state = { projects: [], selectedId: null, editingProjectId: null, dialogImage: null };
+const state = {
+  projects: [],
+  selectedId: null,
+  editingProjectId: null,
+  editingSceneId: null,
+  dialogImage: null
+};
 
 const byId = id => document.querySelector(`#${id}`);
 const projectList = byId("projectList");
@@ -9,6 +15,7 @@ const workspace = byId("workspace");
 const emptyState = byId("emptyState");
 const gallery = byId("gallery");
 const imageCount = byId("imageCount");
+const sceneList = byId("sceneList");
 const health = byId("health");
 const form = byId("generateForm");
 const generateButton = byId("generateButton");
@@ -16,6 +23,9 @@ const message = byId("message");
 const projectDialog = byId("projectDialog");
 const projectForm = byId("projectForm");
 const projectError = byId("projectError");
+const sceneDialog = byId("sceneDialog");
+const sceneForm = byId("sceneForm");
+const sceneError = byId("sceneError");
 const imageDialog = byId("imageDialog");
 
 async function jsonFetch(url, options = {}) {
@@ -29,11 +39,20 @@ function currentProject() {
   return state.projects.find(project => project.id === state.selectedId) || null;
 }
 
-function setBusy(button, busy, text = null) {
+function currentScene() {
+  const project = currentProject();
+  return project?.scenes?.find(scene => scene.id === state.editingSceneId) || null;
+}
+
+function selectedSceneImage(scene, project) {
+  return project.images.find(image => image.id === scene.imageId) || null;
+}
+
+function setBusy(button, busy, busyText = null) {
   if (!button) return;
   if (busy) button.dataset.originalText = button.textContent;
   button.disabled = busy;
-  if (text) button.textContent = busy ? text : (button.dataset.originalText || button.textContent);
+  if (busyText) button.textContent = busy ? busyText : (button.dataset.originalText || button.textContent);
 }
 
 function renderProjects() {
@@ -44,23 +63,98 @@ function renderProjects() {
     const name = document.createElement("strong");
     const count = document.createElement("small");
     name.textContent = project.name;
-    count.textContent = `${project.images.length} image${project.images.length === 1 ? "" : "s"}`;
+    const sceneCount = project.scenes?.length || 0;
+    count.textContent = `${project.images.length} image${project.images.length === 1 ? "" : "s"} · ${sceneCount} scene${sceneCount === 1 ? "" : "s"}`;
     button.append(name, count);
     button.addEventListener("click", () => selectProject(project.id));
     projectList.append(button);
   }
 }
 
-function createCardButton(label, className, handler) {
+function createCardButton(label, className, handler, disabled = false) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = className;
   button.textContent = label;
+  button.disabled = disabled;
   button.addEventListener("click", event => {
     event.stopPropagation();
     handler();
   });
   return button;
+}
+
+function renderScenes(project) {
+  sceneList.innerHTML = "";
+  const scenes = [...(project.scenes || [])].sort((a, b) => a.order - b.order);
+
+  if (!scenes.length) {
+    sceneList.innerHTML = '<div class="gallery-empty">No scenes yet. Add the opening shot for this project.</div>';
+    return;
+  }
+
+  for (const [index, scene] of scenes.entries()) {
+    const selectedImage = selectedSceneImage(scene, project);
+    const card = document.createElement("article");
+    card.className = "scene-card";
+
+    const order = document.createElement("div");
+    order.className = "scene-order";
+    order.textContent = String(index + 1).padStart(2, "0");
+
+    const preview = document.createElement("div");
+    preview.className = "scene-preview";
+    if (selectedImage) {
+      const image = document.createElement("img");
+      image.src = selectedImage.url;
+      image.alt = `Selected image for ${scene.title}`;
+      image.addEventListener("click", () => openImage(selectedImage));
+      preview.append(image);
+    } else {
+      preview.innerHTML = '<span>No image</span>';
+    }
+
+    const content = document.createElement("div");
+    content.className = "scene-content";
+    const heading = document.createElement("div");
+    heading.className = "scene-heading";
+    const title = document.createElement("h4");
+    title.textContent = scene.title;
+    const badges = document.createElement("div");
+    badges.className = "scene-badges";
+    badges.innerHTML = `<span>${scene.duration}s</span><span>${cameraMovementLabel(scene.cameraMovement)}</span>`;
+    heading.append(title, badges);
+
+    const description = document.createElement("p");
+    description.className = "scene-description";
+    description.textContent = scene.description || "No visual notes.";
+
+    const narration = document.createElement("blockquote");
+    narration.textContent = scene.narration || "No narration entered.";
+
+    const controls = document.createElement("div");
+    controls.className = "scene-controls";
+    controls.append(
+      createCardButton("Edit", "text-button", () => showSceneDialog(scene)),
+      createCardButton("Move up", "text-button", () => moveScene(scene, "up"), index === 0),
+      createCardButton("Move down", "text-button", () => moveScene(scene, "down"), index === scenes.length - 1),
+      createCardButton("Delete", "text-button danger-text", () => deleteScene(scene))
+    );
+
+    content.append(heading, description, narration, controls);
+    card.append(order, preview, content);
+    sceneList.append(card);
+  }
+}
+
+function cameraMovementLabel(value) {
+  return ({
+    "none": "No movement",
+    "zoom-in": "Zoom in",
+    "zoom-out": "Zoom out",
+    "pan-left": "Pan left",
+    "pan-right": "Pan right"
+  })[value] || "Zoom in";
 }
 
 function renderWorkspace() {
@@ -80,6 +174,7 @@ function renderWorkspace() {
   projectTitle.textContent = project.name;
   projectDescription.textContent = project.description || "Generate images and build this project’s visual library.";
   imageCount.textContent = `${project.images.length} image${project.images.length === 1 ? "" : "s"}`;
+  renderScenes(project);
   gallery.innerHTML = "";
 
   if (!project.images.length) {
@@ -180,6 +275,97 @@ async function deleteProject() {
   }
 }
 
+function populateSceneImageSelect(project, selectedId = null) {
+  const select = byId("sceneImageId");
+  select.innerHTML = '<option value="">No image selected</option>';
+  for (const image of project.images) {
+    const option = document.createElement("option");
+    option.value = image.id;
+    option.textContent = `${new Date(image.createdAt).toLocaleString()} · Seed ${image.seed}`;
+    option.selected = image.id === selectedId;
+    select.append(option);
+  }
+}
+
+function showSceneDialog(scene = null) {
+  const project = currentProject();
+  if (!project) return;
+  state.editingSceneId = scene?.id || null;
+  sceneForm.reset();
+  sceneError.textContent = "";
+  byId("sceneDialogEyebrow").textContent = scene ? "EDIT SCENE" : "NEW SCENE";
+  byId("sceneDialogTitle").textContent = scene ? "Edit scene" : "Add a scene";
+  byId("saveSceneButton").textContent = scene ? "Save scene" : "Add scene";
+  byId("sceneTitle").value = scene?.title || `Scene ${(project.scenes?.length || 0) + 1}`;
+  byId("sceneDescription").value = scene?.description || "";
+  byId("sceneNarration").value = scene?.narration || "";
+  byId("sceneDuration").value = scene?.duration || 5;
+  byId("sceneCameraMovement").value = scene?.cameraMovement || "zoom-in";
+  populateSceneImageSelect(project, scene?.imageId || null);
+  sceneDialog.showModal();
+  setTimeout(() => byId("sceneTitle").focus(), 0);
+}
+
+async function saveScene(event) {
+  event.preventDefault();
+  const project = currentProject();
+  if (!project) return;
+  sceneError.textContent = "";
+  const editing = Boolean(state.editingSceneId);
+  const payload = {
+    title: byId("sceneTitle").value,
+    description: byId("sceneDescription").value,
+    narration: byId("sceneNarration").value,
+    duration: Number(byId("sceneDuration").value),
+    cameraMovement: byId("sceneCameraMovement").value,
+    imageId: byId("sceneImageId").value || null
+  };
+
+  try {
+    await jsonFetch(
+      editing
+        ? `/api/projects/${project.id}/scenes/${state.editingSceneId}`
+        : `/api/projects/${project.id}/scenes`,
+      {
+        method: editing ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }
+    );
+    sceneDialog.close();
+    state.editingSceneId = null;
+    await loadProjects(project.id);
+  } catch (error) {
+    sceneError.textContent = error.message;
+  }
+}
+
+async function deleteScene(scene) {
+  const project = currentProject();
+  if (!project || !confirm(`Delete scene “${scene.title}”?`)) return;
+  try {
+    await jsonFetch(`/api/projects/${project.id}/scenes/${scene.id}`, { method: "DELETE" });
+    await loadProjects(project.id);
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function moveScene(scene, direction) {
+  const project = currentProject();
+  if (!project) return;
+  try {
+    await jsonFetch(`/api/projects/${project.id}/scenes/${scene.id}/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ direction })
+    });
+    await loadProjects(project.id);
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
 function generationPayload() {
   const seedText = byId("seed").value.trim();
   const payload = {
@@ -269,7 +455,7 @@ Created: ${new Date(image.createdAt).toLocaleString()}`;
 
 async function deleteImage(image) {
   const project = currentProject();
-  if (!project || !confirm("Delete this image from the project?")) return;
+  if (!project || !confirm("Delete this image from the project? Scenes using it will become unassigned.")) return;
   try {
     await jsonFetch(`/api/projects/${project.id}/images/${image.id}`, { method: "DELETE" });
     if (imageDialog.open) imageDialog.close();
@@ -295,14 +481,20 @@ byId("newProjectButton").addEventListener("click", () => showProjectDialog());
 byId("emptyCreateButton").addEventListener("click", () => showProjectDialog());
 byId("editProjectButton").addEventListener("click", () => showProjectDialog(currentProject()));
 byId("deleteProjectButton").addEventListener("click", deleteProject);
+byId("newSceneButton").addEventListener("click", () => showSceneDialog());
 byId("cancelProject").addEventListener("click", () => projectDialog.close());
+byId("cancelScene").addEventListener("click", () => sceneDialog.close());
 byId("closeImageDialog").addEventListener("click", () => imageDialog.close());
-byId("clearSeedButton").addEventListener("click", () => { byId("seed").value = ""; message.textContent = "The next generation will use a random seed."; });
+byId("clearSeedButton").addEventListener("click", () => {
+  byId("seed").value = "";
+  message.textContent = "The next generation will use a random seed.";
+});
 byId("useImageSettingsButton").addEventListener("click", () => state.dialogImage && useImageSettings(state.dialogImage));
 byId("regenerateImageButton").addEventListener("click", () => state.dialogImage && regenerateImage(state.dialogImage, false));
 byId("regenerateRandomButton").addEventListener("click", () => state.dialogImage && regenerateImage(state.dialogImage, true));
 byId("deleteDialogImageButton").addEventListener("click", () => state.dialogImage && deleteImage(state.dialogImage));
 projectForm.addEventListener("submit", saveProject);
+sceneForm.addEventListener("submit", saveScene);
 form.addEventListener("submit", generateImage);
 
 await Promise.all([loadProjects(), checkHealth()]);

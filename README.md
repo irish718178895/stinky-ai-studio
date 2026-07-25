@@ -1,8 +1,8 @@
-# Stinky AI Studio v0.3
+# Stinky AI Studio v0.4
 
 This release adds project maintenance and reusable image-generation settings.
 
-## New in v0.3
+## New in v0.4
 
 - Rename projects and edit descriptions
 - Delete projects and their saved image files safely
@@ -31,3 +31,17 @@ npm start
 ```
 
 Open `http://127.0.0.1:3000`.
+
+
+## v0.4 Scene Builder
+
+Each project can now contain an ordered scene plan. A scene stores:
+
+- Title and visual notes
+- Narration text
+- Duration in seconds
+- Camera movement
+- One selected project image
+- Scene order
+
+This release prepares the project data for FFmpeg video rendering in v0.5.
