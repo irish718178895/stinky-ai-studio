@@ -287,8 +287,3 @@ select:focus { outline: 2px solid #c97b2b; border-color: transparent; }
 .range-value { color:#d7a15d; font-size:.82rem; }
 .render-settings input[type=range] { padding:0; }
 @media (max-width:850px) { .music-track { grid-template-columns:1fr; } .music-track-actions { justify-content:flex-start; } }
-
-/* Always honor the native hidden attribute. */
-[hidden] {
-  display: none !important;
-}

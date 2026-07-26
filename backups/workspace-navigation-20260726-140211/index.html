@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stinky AI Studio v0.9</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <p class="eyebrow">LOCAL CREATIVE ENGINE</p>
+        <h1>Stinky AI Studio</h1>
+      </div>
+      <button id="newProjectButton" class="primary full">+ New project</button>
+      <div class="project-heading">Projects</div>
+      <nav id="projectList" class="project-list"></nav>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">PROJECT WORKSPACE</p>
+          <h2 id="projectTitle">Create your first project</h2>
+          <p id="projectDescription" class="muted">Images and generation settings will stay organized here.</p>
+          <div id="projectActions" class="project-actions" hidden>
+            <button id="editProjectButton" class="secondary small" type="button">Edit project</button>
+            <button id="deleteProjectButton" class="danger small" type="button">Delete project</button>
+          </div>
+        </div>
+        <div id="health" class="status">Checking ComfyUI…</div>
+      </header>
+
+      <section id="emptyState" class="empty-state">
+        <h3>No project selected</h3>
+        <p>Create a project to begin generating and saving images.</p>
+        <button id="emptyCreateButton" class="primary">Create project</button>
+      </section>
+
+      <div id="workspace" hidden>
+        <section class="panel generator-panel">
+          <form id="generateForm">
+            <label>
+              Positive prompt
+              <textarea id="prompt" rows="6" required>A rugged railroad worker covered in grease, coal dust, sweat, and oil stains, standing proudly between freight trains in a smoky industrial rail yard at sunrise. Heavy work boots, worn denim overalls, dirty gloves, weathered face, determined expression, cinematic lighting, volumetric smoke, dramatic industrial atmosphere, ultra realistic, highly detailed, gritty blue-collar realism.</textarea>
+            </label>
+            <label>
+              Negative prompt
+              <textarea id="negativePrompt" rows="3">cartoon, anime, illustration, CGI, clean clothes, smiling, blurry, low quality, watermark, logo, text, duplicate person, deformed hands, extra fingers</textarea>
+            </label>
+            <div class="settings">
+              <label>Width<input id="width" type="number" min="256" max="768" step="64" value="512"></label>
+              <label>Height<input id="height" type="number" min="256" max="768" step="64" value="512"></label>
+              <label>Steps<input id="steps" type="number" min="1" max="40" value="20"></label>
+              <label>CFG<input id="cfg" type="number" min="1" max="15" step="0.5" value="7"></label>
+              <label>Seed<input id="seed" type="number" placeholder="Random"></label>
+            </div>
+            <div class="actions">
+              <button id="generateButton" class="primary" type="submit">Generate and save</button>
+              <button id="clearSeedButton" class="secondary" type="button">Random seed</button>
+              <p id="message" class="message"></p>
+            </div>
+          </form>
+        </section>
+
+
+
+        <section class="panel storyboard-panel">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">LOCAL AI DIRECTOR</p>
+              <h3>Storyboard generator</h3>
+            </div>
+            <span id="ollamaStatus" class="status">Checking Ollama…</span>
+          </div>
+          <p class="muted">Turn one commercial idea into an ordered scene plan with image prompts, narration, timing, and camera movement.</p>
+          <form id="storyboardForm">
+            <label>Commercial idea
+              <textarea id="storyboardIdea" rows="4" required placeholder="A railroad worker starts before sunrise, works through rain and smoke, and ends the day proudly wearing Stinky McGee gear."></textarea>
+            </label>
+            <div class="storyboard-settings">
+              <label>Length
+                <select id="storyboardLength"><option value="15">15 seconds</option><option value="30" selected>30 seconds</option><option value="60">60 seconds</option></select>
+              </label>
+              <label>Style
+                <select id="storyboardStyle"><option value="cinematic">Cinematic</option><option value="industrial">Industrial</option><option value="documentary">Documentary</option><option value="dramatic">Dramatic</option><option value="funny">Funny</option></select>
+              </label>
+              <label>Audience<input id="storyboardAudience" value="Blue-collar workers" maxlength="120"></label>
+              <label>Ollama model<input id="storyboardModel" value="qwen2.5:3b" maxlength="120"></label>
+            </div>
+            <label class="checkbox-label"><input id="storyboardReplace" type="checkbox" checked> Replace existing scenes</label>
+            <div class="actions">
+              <button id="generateStoryboardButton" class="primary" type="submit">Generate storyboard</button>
+              <button id="loadFirstPromptButton" class="secondary" type="button">Load first scene prompt</button>
+              <p id="storyboardMessage" class="message"></p>
+            </div>
+          </form>
+        </section>
+
+        <section class="scene-section">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">VIDEO PLAN</p>
+              <h3>Scene builder</h3>
+            </div>
+            <button id="newSceneButton" class="primary small" type="button">+ Add scene</button>
+          </div>
+          <p class="muted scene-help">Assign an image, duration, and camera movement to every scene, then render a cinematic local MP4.</p>
+          <div class="batch-image-bar">
+            <button id="generateAllImagesButton" class="primary" type="button">Generate missing scene images</button>
+            <button id="cancelImageBatchButton" class="secondary" type="button" hidden>Cancel after current scene</button>
+            <label class="checkbox-label compact"><input id="regenerateAssignedImages" type="checkbox"> Regenerate scenes that already have images</label>
+            <div class="render-progress-wrap">
+              <progress id="imageBatchProgress" max="100" value="0" hidden></progress>
+              <span id="imageBatchMessage" class="message"></span>
+            </div>
+          </div>
+          <div id="sceneList" class="scene-list"></div>
+          <div class="voice-studio-bar">
+            <div>
+              <p class="eyebrow">LOCAL VOICE STUDIO</p>
+              <strong>Generate narration with Piper</strong>
+              <span id="piperStatus" class="status">Checking Piper…</span>
+            </div>
+            <div class="voice-controls">
+              <label>Voice speed
+                <select id="voiceLengthScale">
+                  <option value="0.85">Faster</option>
+                  <option value="1" selected>Normal</option>
+                  <option value="1.15">Slower</option>
+                  <option value="1.3">Much slower</option>
+                </select>
+              </label>
+              <button id="generateAllVoicesButton" class="primary" type="button">Generate missing narration</button>
+              <label class="checkbox-label compact"><input id="regenerateVoices" type="checkbox"> Regenerate existing narration</label>
+              <span id="voiceMessage" class="message"></span>
+            </div>
+          </div>
+          <div class="music-studio-bar">
+            <div>
+              <p class="eyebrow">BACKGROUND MUSIC</p>
+              <strong>Upload and mix a local music track</strong>
+              <p class="muted compact-copy">MP3, WAV, M4A, AAC, OGG, or FLAC up to 30 MB.</p>
+            </div>
+            <div class="music-upload-controls">
+              <input id="musicFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
+              <button id="uploadMusicButton" class="secondary" type="button">Upload music</button>
+              <span id="musicMessage" class="message"></span>
+            </div>
+          </div>
+          <div id="musicLibrary" class="music-library"></div>
+          <div class="render-settings">
+            <label>Resolution
+              <select id="renderResolution"><option value="720p">720p</option><option value="1080p">1080p</option></select>
+            </label>
+            <label>FPS
+              <select id="renderFps"><option value="24">24</option><option value="30" selected>30</option><option value="60">60</option></select>
+            </label>
+            <label>Transition
+              <select id="renderTransition"><option value="crossfade">Crossfade</option><option value="dip-black">Dip to black</option><option value="cut">Cut</option></select>
+            </label>
+            <label>Encoder
+              <select id="renderEncoder"><option value="auto">Auto</option><option value="cpu">CPU / libx264</option><option value="nvidia">NVIDIA NVENC</option></select>
+            </label>
+            <label class="checkbox-label render-audio"><input id="includeNarration" type="checkbox" checked> Include generated narration</label>
+            <label class="checkbox-label render-audio"><input id="includeMusic" type="checkbox"> Include background music</label>
+            <label>Music track
+              <select id="renderMusicTrack"><option value="">No music selected</option></select>
+            </label>
+            <label>Music volume
+              <input id="musicVolume" type="range" min="0" max="1" step="0.05" value="0.22">
+              <span id="musicVolumeLabel" class="range-value">22%</span>
+            </label>
+            <label>Fade in/out
+              <select id="musicFade"><option value="0">None</option><option value="1">1 second</option><option value="1.5" selected>1.5 seconds</option><option value="2.5">2.5 seconds</option><option value="4">4 seconds</option></select>
+            </label>
+            <label class="checkbox-label render-audio"><input id="duckMusic" type="checkbox" checked> Duck music under narration</label>
+          </div>
+          <div class="video-render-bar">
+            <button id="renderVideoButton" class="primary" type="button">Render MP4</button>
+            <div class="render-progress-wrap">
+              <progress id="renderProgress" max="100" value="0" hidden></progress>
+              <span id="renderMessage" class="message"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="video-section">
+          <div class="section-title"><h3>Rendered videos</h3><span id="videoCount" class="count">0 videos</span></div>
+          <div id="videoList" class="video-list"></div>
+        </section>
+
+        <section class="gallery-section">
+          <div class="section-title">
+            <h3>Project gallery</h3>
+            <span id="imageCount" class="count">0 images</span>
+          </div>
+          <div id="gallery" class="gallery"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="projectDialog">
+    <form id="projectForm" class="dialog-form">
+      <div>
+        <p id="projectDialogEyebrow" class="eyebrow">NEW PROJECT</p>
+        <h3 id="projectDialogTitle">Create a project</h3>
+      </div>
+      <label>Project name<input id="projectName" maxlength="100" required placeholder="Railroad Commercial"></label>
+      <label>Description<textarea id="projectDesc" rows="3" maxlength="500" placeholder="Optional campaign notes"></textarea></label>
+
+<fieldset class="provider-settings">
+  <legend>Execution Providers</legend>
+
+  <div class="provider-card">
+    <label>
+      Image Provider
+      <select id="projectImageProvider"></select>
+    </label>
+    <div
+      id="projectImageProviderSettings"
+      class="provider-fields">
+    </div>
+  </div>
+
+  <div class="provider-card">
+    <label>
+      Story Provider
+      <select id="projectStoryProvider"></select>
+    </label>
+    <div
+      id="projectStoryProviderSettings"
+      class="provider-fields">
+    </div>
+  </div>
+
+  <div class="provider-card">
+    <label>
+      Voice Provider
+      <select id="projectVoiceProvider"></select>
+    </label>
+    <div
+      id="projectVoiceProviderSettings"
+      class="provider-fields">
+    </div>
+  </div>
+
+  <div class="provider-card">
+    <label>
+      Render Provider
+      <select id="projectRenderProvider"></select>
+    </label>
+    <div
+      id="projectRenderProviderSettings"
+      class="provider-fields">
+    </div>
+  </div>
+</fieldset>
+
+      <p id="projectError" class="error"></p>
+      <div class="dialog-actions">
+        <button id="cancelProject" type="button" class="secondary">Cancel</button>
+        <button id="saveProjectButton" type="submit" class="primary">Create project</button>
+      </div>
+    </form>
+  </dialog>
+
+
+  <dialog id="sceneDialog">
+    <form id="sceneForm" class="dialog-form scene-form">
+      <div>
+        <p id="sceneDialogEyebrow" class="eyebrow">NEW SCENE</p>
+        <h3 id="sceneDialogTitle">Add a scene</h3>
+      </div>
+      <label>Scene title<input id="sceneTitle" maxlength="100" required placeholder="Opening hero shot"></label>
+      <label>Visual notes<textarea id="sceneDescription" rows="3" maxlength="500" placeholder="Worker walks toward camera through rail-yard smoke"></textarea></label>
+      <label>Image generation prompt<textarea id="sceneImagePrompt" rows="5" maxlength="4000" placeholder="Detailed Stable Diffusion prompt for this scene"></textarea></label>
+      <label>Narration<textarea id="sceneNarration" rows="4" maxlength="2000" placeholder="Hard work does not ask for permission."></textarea></label>
+      <div class="scene-settings">
+        <label>Duration (seconds)<input id="sceneDuration" type="number" min="1" max="60" step="0.5" value="5"></label>
+        <label>Camera movement
+          <select id="sceneCameraMovement">
+            <option value="zoom-in">Slow zoom in</option>
+            <option value="zoom-out">Slow zoom out</option>
+            <option value="pan-left">Pan left</option>
+            <option value="pan-right">Pan right</option>
+            <option value="none">No movement</option>
+          </select>
+        </label>
+      </div>
+      <label>Selected image
+        <select id="sceneImageId">
+          <option value="">No image selected</option>
+        </select>
+      </label>
+      <p id="sceneError" class="error"></p>
+      <div class="dialog-actions">
+        <button id="cancelScene" type="button" class="secondary">Cancel</button>
+        <button id="saveSceneButton" type="submit" class="primary">Add scene</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="imageDialog" class="image-dialog">
+    <button id="closeImageDialog" class="close-button" aria-label="Close">×</button>
+    <img id="largeImage" alt="Generated image">
+    <div id="imageMetadata" class="metadata"></div>
+    <div class="dialog-actions image-actions">
+      <button id="useImageSettingsButton" class="secondary" type="button">Use these settings</button>
+      <button id="regenerateImageButton" class="primary" type="button">Regenerate same seed</button>
+      <button id="regenerateRandomButton" class="secondary" type="button">Regenerate random seed</button>
+      <button id="deleteDialogImageButton" class="danger" type="button">Delete image</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
