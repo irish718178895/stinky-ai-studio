@@ -1,88 +1,20 @@
-const state = {
-  projects: [],
-  selectedId: null,
-  editingProjectId: null,
-  editingSceneId: null,
-  dialogImage: null,
-  imageJobId: null,
-  playingAudio: null
-};
+import { jsonFetch } from "./js/api.js";
+import { state, currentProject, currentScene, selectedSceneImage } from "./js/state.js";
+import { byId, elements } from "./js/dom.js";
+import { setBusy, cameraMovementLabel } from "./js/ui.js";
+import { on, emit, events } from "./js/events.js";
 
-const byId = id => document.querySelector(`#${id}`);
-const projectList = byId("projectList");
-const projectTitle = byId("projectTitle");
-const projectDescription = byId("projectDescription");
-const projectActions = byId("projectActions");
-const workspace = byId("workspace");
-const emptyState = byId("emptyState");
-const gallery = byId("gallery");
-const imageCount = byId("imageCount");
-const videoList = byId("videoList");
-const videoCount = byId("videoCount");
-const renderVideoButton = byId("renderVideoButton");
-const renderMessage = byId("renderMessage");
-const renderProgress = byId("renderProgress");
-const renderResolution = byId("renderResolution");
-const renderFps = byId("renderFps");
-const renderTransition = byId("renderTransition");
-const renderEncoder = byId("renderEncoder");
-const sceneList = byId("sceneList");
-const health = byId("health");
-const form = byId("generateForm");
-const generateButton = byId("generateButton");
-const message = byId("message");
-const projectDialog = byId("projectDialog");
-const projectForm = byId("projectForm");
-const projectError = byId("projectError");
-const sceneDialog = byId("sceneDialog");
-const sceneForm = byId("sceneForm");
-const sceneError = byId("sceneError");
-const imageDialog = byId("imageDialog");
-const storyboardForm = byId("storyboardForm");
-const storyboardMessage = byId("storyboardMessage");
-const generateStoryboardButton = byId("generateStoryboardButton");
-const ollamaStatus = byId("ollamaStatus");
-const generateAllImagesButton = byId("generateAllImagesButton");
-const cancelImageBatchButton = byId("cancelImageBatchButton");
-const imageBatchProgress = byId("imageBatchProgress");
-const imageBatchMessage = byId("imageBatchMessage");
-const piperStatus = byId("piperStatus");
-const generateAllVoicesButton = byId("generateAllVoicesButton");
-const voiceMessage = byId("voiceMessage");
-const musicFile = byId("musicFile");
-const uploadMusicButton = byId("uploadMusicButton");
-const musicMessage = byId("musicMessage");
-const musicLibrary = byId("musicLibrary");
-const renderMusicTrack = byId("renderMusicTrack");
-const musicVolume = byId("musicVolume");
-const musicVolumeLabel = byId("musicVolumeLabel");
-
-async function jsonFetch(url, options = {}) {
-  const response = await fetch(url, options);
-  const data = response.status === 204 ? null : await response.json();
-  if (!response.ok) throw new Error(data?.error || `Request failed: ${response.status}`);
-  return data;
-}
-
-function currentProject() {
-  return state.projects.find(project => project.id === state.selectedId) || null;
-}
-
-function currentScene() {
-  const project = currentProject();
-  return project?.scenes?.find(scene => scene.id === state.editingSceneId) || null;
-}
-
-function selectedSceneImage(scene, project) {
-  return project.images.find(image => image.id === scene.imageId) || null;
-}
-
-function setBusy(button, busy, busyText = null) {
-  if (!button) return;
-  if (busy) button.dataset.originalText = button.textContent;
-  button.disabled = busy;
-  if (busyText) button.textContent = busy ? busyText : (button.dataset.originalText || button.textContent);
-}
+const {
+  projectList, projectTitle, projectDescription, projectActions, workspace, emptyState,
+  gallery, imageCount, videoList, videoCount, renderVideoButton, renderMessage,
+  renderProgress, renderResolution, renderFps, renderTransition, renderEncoder, sceneList,
+  health, form, generateButton, message, projectDialog, projectForm, projectError,
+  sceneDialog, sceneForm, sceneError, imageDialog, storyboardForm, storyboardMessage,
+  generateStoryboardButton, ollamaStatus, generateAllImagesButton, cancelImageBatchButton,
+  imageBatchProgress, imageBatchMessage, piperStatus, generateAllVoicesButton, voiceMessage,
+  musicFile, uploadMusicButton, musicMessage, musicLibrary, renderMusicTrack, musicVolume,
+  musicVolumeLabel
+} = elements;
 
 function renderProjects() {
   projectList.innerHTML = "";
@@ -176,16 +108,6 @@ function renderScenes(project) {
     card.append(order, preview, content);
     sceneList.append(card);
   }
-}
-
-function cameraMovementLabel(value) {
-  return ({
-    "none": "No movement",
-    "zoom-in": "Zoom in",
-    "zoom-out": "Zoom out",
-    "pan-left": "Pan left",
-    "pan-right": "Pan right"
-  })[value] || "Zoom in";
 }
 
 
@@ -567,19 +489,46 @@ function renderWorkspace() {
 
 async function loadProjects(preferredId = null) {
   state.projects = await jsonFetch("/api/projects");
-  if (preferredId && state.projects.some(project => project.id === preferredId)) state.selectedId = preferredId;
-  if (!state.selectedId || !state.projects.some(project => project.id === state.selectedId)) {
+
+  if (
+    preferredId &&
+    state.projects.some(project => project.id === preferredId)
+  ) {
+    state.selectedId = preferredId;
+  }
+
+  if (
+    !state.selectedId ||
+    !state.projects.some(project => project.id === state.selectedId)
+  ) {
     state.selectedId = state.projects[0]?.id || null;
   }
-  renderProjects();
-  renderWorkspace();
+
+  emit(events.PROJECTS_LOADED, {
+    projects: state.projects,
+    selectedId: state.selectedId
+  });
 }
 
 function selectProject(id) {
+  if (id === state.selectedId) {
+    return;
+  }
+
+  const project = state.projects.find(item => item.id === id);
+
+  if (!project) {
+    console.warn(`Cannot select unknown project: ${id}`);
+    return;
+  }
+
   state.selectedId = id;
   message.textContent = "";
-  renderProjects();
-  renderWorkspace();
+
+  emit(events.PROJECT_SELECTED, {
+    project,
+    projectId: id
+  });
 }
 
 function showProjectDialog(project = null) {
@@ -882,6 +831,16 @@ async function checkHealth() {
     health.className = "status bad";
   }
 }
+
+on(events.PROJECTS_LOADED, () => {
+  renderProjects();
+  renderWorkspace();
+});
+
+on(events.PROJECT_SELECTED, () => {
+  renderProjects();
+  renderWorkspace();
+});
 
 byId("newProjectButton").addEventListener("click", () => showProjectDialog());
 byId("emptyCreateButton").addEventListener("click", () => showProjectDialog());
