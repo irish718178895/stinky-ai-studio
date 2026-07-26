@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_FILES_DIR } from "../config.js";
 import { readProjects, writeProjects, publicProject } from "../services/project-store.js";
+import { normalizeProviderManifest, validateProviderManifest } from "../providers/manager.js";
 
 const router = express.Router();
 
@@ -27,6 +28,9 @@ router.post("/api/projects", async (req, res) => {
       id: crypto.randomUUID(),
       name,
       description: String(req.body.description || "").trim().slice(0, 500),
+      providers: req.body.providers === undefined
+        ? normalizeProviderManifest()
+        : validateProviderManifest(req.body.providers),
       createdAt: now,
       updatedAt: now,
       images: [],
@@ -64,6 +68,14 @@ router.patch("/api/projects/:id", async (req, res) => {
 
     project.name = name;
     project.description = String(req.body.description ?? project.description ?? "").trim().slice(0, 500);
+
+    if (req.body.providers !== undefined) {
+      project.providers = validateProviderManifest({
+        ...project.providers,
+        ...req.body.providers
+      });
+    }
+
     project.updatedAt = new Date().toISOString();
     await writeProjects(projects);
     res.json(publicProject(project));

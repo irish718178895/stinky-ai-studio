@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { DATA_DIR, PROJECTS_FILE, PROJECT_FILES_DIR } from "../config.js";
+import { normalizeProviderManifest } from "../providers/manager.js";
 
 export async function ensureStorage() {
   await fs.mkdir(PROJECT_FILES_DIR, { recursive: true });
@@ -30,6 +31,7 @@ export function normalizeProject(project) {
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   return {
     ...project,
+    providers: normalizeProviderManifest(project.providers),
     images,
     videos: Array.isArray(project.videos) ? project.videos : [],
     musicTracks: Array.isArray(project.musicTracks) ? project.musicTracks : [],
