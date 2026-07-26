@@ -14,21 +14,6 @@
         <h1>Stinky AI Studio</h1>
       </div>
       <button id="newProjectButton" class="primary full">+ New project</button>
-
-      <div id="studioWorkspaceNavigation" class="workspace-navigation" aria-label="Studio workspaces">
-        <div class="project-heading">Studio</div>
-        <nav class="workspace-nav-list">
-          <button type="button" data-workspace="project"><span aria-hidden="true">📁</span><span>Project</span></button>
-          <button type="button" data-workspace="script"><span aria-hidden="true">📝</span><span>Script</span></button>
-          <button type="button" data-workspace="storyboard"><span aria-hidden="true">🎬</span><span>Storyboard</span></button>
-          <button type="button" data-workspace="images"><span aria-hidden="true">🖼</span><span>Images</span></button>
-          <button type="button" data-workspace="voices"><span aria-hidden="true">🎤</span><span>Voices</span></button>
-          <button type="button" data-workspace="music"><span aria-hidden="true">🎵</span><span>Music</span></button>
-          <button type="button" data-workspace="timeline"><span aria-hidden="true">🎞</span><span>Timeline</span></button>
-          <button type="button" data-workspace="render"><span aria-hidden="true">🎥</span><span>Render</span></button>
-          <button type="button" id="workspaceProvidersButton"><span aria-hidden="true">⚙</span><span>Providers</span></button>
-        </nav>
-      </div>
       <div class="project-heading">Projects</div>
       <nav id="projectList" class="project-list"></nav>
     </aside>
@@ -54,23 +39,7 @@
       </section>
 
       <div id="workspace" hidden>
-
-        <section class="panel project-overview-panel" data-workspace-section="project">
-          <div class="section-title">
-            <div>
-              <p class="eyebrow">PRODUCTION DASHBOARD</p>
-              <h3>Project overview</h3>
-            </div>
-          </div>
-          <p class="muted">Choose a production stage from the Studio navigation. Your existing project tools and data remain unchanged.</p>
-          <div class="workspace-quick-actions">
-            <button type="button" class="primary" data-open-workspace="storyboard">Build storyboard</button>
-            <button type="button" class="secondary" data-open-workspace="images">Generate images</button>
-            <button type="button" class="secondary" data-open-workspace="timeline">Edit timeline</button>
-            <button type="button" class="secondary" data-open-workspace="render">Render video</button>
-          </div>
-        </section>
-        <section class="panel generator-panel" data-workspace-section="images">
+        <section class="panel generator-panel">
           <form id="generateForm">
             <label>
               Positive prompt
@@ -97,83 +66,7 @@
 
 
 
-
-        <section class="panel script-workspace-panel" data-workspace-section="script">
-          <div class="section-title">
-            <div>
-              <p class="eyebrow">MASTER PRODUCTION SCRIPT</p>
-              <h3>Script workspace</h3>
-            </div>
-            <span id="scriptSaveStatus" class="status">Ready</span>
-          </div>
-
-          <p class="muted">Write the master script that will drive the storyboard, narration, timing, and future AI Director tools.</p>
-
-          <form id="scriptWorkspaceForm" class="script-workspace-form">
-            <div class="script-brief-grid">
-              <label>Script title
-                <input id="scriptTitle" maxlength="150" placeholder="Hard Work Ain't Easy">
-              </label>
-
-              <label>Audience
-                <input id="scriptAudience" maxlength="200" placeholder="Blue-collar workers">
-              </label>
-
-              <label>Duration
-                <select id="scriptDuration">
-                  <option value="15">15 seconds</option>
-                  <option value="30">30 seconds</option>
-                  <option value="60">60 seconds</option>
-                  <option value="90">90 seconds</option>
-                </select>
-              </label>
-
-              <label>Style
-                <select id="scriptStyle">
-                  <option value="cinematic">Cinematic</option>
-                  <option value="industrial">Industrial</option>
-                  <option value="documentary">Documentary</option>
-                  <option value="dramatic">Dramatic</option>
-                  <option value="funny">Funny</option>
-                  <option value="inspirational">Inspirational</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </label>
-
-              <label class="script-wide-field">Tone
-                <input id="scriptTone" maxlength="400" placeholder="gritty, inspirational, proud">
-                <span class="field-help">Separate tones with commas.</span>
-              </label>
-
-              <label class="script-wide-field">Call to action
-                <input id="scriptCallToAction" maxlength="500" placeholder="Be Like Stinky. Stay Stinky.">
-              </label>
-
-              <label class="script-wide-field">Summary
-                <textarea id="scriptSummary" rows="3" maxlength="1000" placeholder="A concise description of the commercial and its goal."></textarea>
-              </label>
-            </div>
-
-            <label class="script-editor-label">Master script
-              <textarea id="scriptContent" class="script-editor" rows="20" maxlength="20000" placeholder="Every sunrise starts with someone willing to get dirty..."></textarea>
-            </label>
-
-            <div class="script-stats" aria-live="polite">
-              <span><strong id="scriptWordCount">0</strong> words</span>
-              <span><strong id="scriptCharacterCount">0</strong> characters</span>
-              <span><strong id="scriptEstimatedSeconds">0</strong> sec narration</span>
-              <span>Version <strong id="scriptVersion">1</strong></span>
-            </div>
-
-            <div class="actions script-actions">
-              <button id="saveScriptButton" class="primary" type="submit">Save script</button>
-              <button id="scriptToStoryboardButton" class="secondary" type="button">Use for storyboard</button>
-              <p id="scriptMessage" class="message"></p>
-            </div>
-          </form>
-        </section>
-
-        <section class="panel storyboard-panel" data-workspace-section="storyboard">
+        <section class="panel storyboard-panel">
           <div class="section-title">
             <div>
               <p class="eyebrow">LOCAL AI DIRECTOR</p>
@@ -205,7 +98,7 @@
           </form>
         </section>
 
-        <section class="scene-section" data-workspace-section="production">
+        <section class="scene-section">
           <div class="section-title">
             <div>
               <p class="eyebrow">VIDEO PLAN</p>
@@ -293,12 +186,12 @@
           </div>
         </section>
 
-        <section class="video-section" data-workspace-section="render">
+        <section class="video-section">
           <div class="section-title"><h3>Rendered videos</h3><span id="videoCount" class="count">0 videos</span></div>
           <div id="videoList" class="video-list"></div>
         </section>
 
-        <section class="gallery-section" data-workspace-section="images">
+        <section class="gallery-section">
           <div class="section-title">
             <h3>Project gallery</h3>
             <span id="imageCount" class="count">0 images</span>

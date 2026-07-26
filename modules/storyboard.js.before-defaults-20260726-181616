@@ -112,7 +112,7 @@ function normalizeScene(
 export async function generateStoryboard({
   ollamaUrl,
   model,
-  temperature = 0.3,
+  temperature = 0.7,
   idea,
   length,
   style,
@@ -227,7 +227,7 @@ Keep it simple, visually clear, and practical for one still image per scene.`;
 
           options: {
             temperature,
-            num_predict: 512,
+            num_predict: 300,
             num_ctx: 4096
           }
         })

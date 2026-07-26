@@ -5,7 +5,6 @@ import path from "node:path";
 import { PROJECT_FILES_DIR } from "../config.js";
 import { readProjects, writeProjects, publicProject } from "../services/project-store.js";
 import { normalizeProviderManifest, validateProviderManifest } from "../providers/manager.js";
-import { createDefaultScript, updateScript } from "../services/script-service.js";
 
 const router = express.Router();
 
@@ -108,37 +107,6 @@ if (req.body.providerSettings !== undefined) {
   }
 });
 
-
-router.get("/api/projects/:id/script", async (req, res) => {
-  try {
-    const projects = await readProjects();
-    const project = projects.find(item => item.id === req.params.id);
-
-    if (!project) return res.status(404).json({ error: "Project not found." });
-    res.json(project.script);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-router.patch("/api/projects/:id/script", async (req, res) => {
-  try {
-    const projects = await readProjects();
-    const project = projects.find(item => item.id === req.params.id);
-
-    if (!project) return res.status(404).json({ error: "Project not found." });
-
-    const now = new Date().toISOString();
-    project.script = updateScript(project.script, req.body, now);
-    project.updatedAt = now;
-
-    await writeProjects(projects);
-    res.json(project.script);
-  } catch (error) {
-    res.status(error instanceof TypeError ? 400 : 500).json({ error: error.message });
-  }
-});
-
 router.delete("/api/projects/:id", async (req, res) => {
   try {
     const projects = await readProjects();
@@ -181,7 +149,6 @@ router.post("/api/projects/:id/scenes", async (req, res) => {
         : "zoom-in",
       imageId: project.images.some(image => image.id === req.body.imageId) ? req.body.imageId : null,
       order: project.scenes.length,
-      script: createDefaultScript(now),
       createdAt: now,
       updatedAt: now
     };

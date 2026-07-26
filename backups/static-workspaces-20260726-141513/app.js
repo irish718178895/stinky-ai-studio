@@ -3,8 +3,6 @@ import { state, currentProject, currentScene, selectedSceneImage } from "./js/st
 import { byId, elements } from "./js/dom.js";
 import { setBusy, cameraMovementLabel } from "./js/ui.js";
 import { on, emit, events } from "./js/events.js";
-import { initStudioNavigation } from "./js/studio-navigation.js";
-import { initScriptWorkspace } from "./js/script-workspace.js";
 
 const providerCatalog = {
   defaults: {},
@@ -1166,6 +1164,3 @@ await Promise.all([
   checkOllama(),
   checkPiper()
 ]);
-
-initStudioNavigation();
-initScriptWorkspace();

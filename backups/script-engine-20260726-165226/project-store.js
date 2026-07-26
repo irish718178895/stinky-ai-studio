@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { DATA_DIR, PROJECTS_FILE, PROJECT_FILES_DIR } from "../config.js";
 import { normalizeProviderManifest } from "../providers/manager.js";
-import { normalizeScript } from "./script-service.js";
 
 export async function ensureStorage() {
   await fs.mkdir(PROJECT_FILES_DIR, { recursive: true });
@@ -33,7 +32,6 @@ export function normalizeProject(project) {
   return {
     ...project,
     providers: normalizeProviderManifest(project.providers),
-    script: normalizeScript(project.script),
 	  providerSettings:
   project.providerSettings &&
   typeof project.providerSettings === "object" &&
