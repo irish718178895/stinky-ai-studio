@@ -11,6 +11,7 @@ import storyboardRoutes from "./routes/storyboard.js";
 import projectRoutes from "./routes/projects.js";
 import imageRoutes from "./routes/images.js";
 import renderRoutes from "./routes/render.js";
+import providerRoutes from "./routes/providers.js";
 
 const app = express();
 
@@ -25,6 +26,7 @@ app.use(storyboardRoutes);
 app.use(projectRoutes);
 app.use(imageRoutes);
 app.use(renderRoutes);
+app.use(providerRoutes);
 
 await ensureStorage();
 app.listen(PORT, "127.0.0.1", () => {
