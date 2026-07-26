@@ -1,6 +1,7 @@
 import { comfyuiProvider } from "./image/comfyui.js";
 import { piperProvider } from "./voice/piper.js";
 import { ffmpegProvider } from "./render/ffmpeg.js";
+import { ollamaProvider } from "./story/ollama.js";
 
 const providerRegistry = new Map();
 
@@ -78,3 +79,4 @@ export function hasProvider(type, id) {
 registerProvider(comfyuiProvider);
 registerProvider(piperProvider);
 registerProvider(ffmpegProvider);
+registerProvider(ollamaProvider);
