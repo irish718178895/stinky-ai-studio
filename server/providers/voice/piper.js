@@ -7,6 +7,19 @@ export const piperProvider = {
   id: "piper",
   type: "voice",
   name: "Piper",
+  version: "1.0",
+
+  capabilities: Object.freeze([
+    "tts",
+    "batch"
+  ]),
+
+  supports: Object.freeze({
+    gpu: false,
+    cpu: true,
+    local: true,
+    remote: false
+  }),
 
   async health() {
     try {

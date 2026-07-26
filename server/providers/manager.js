@@ -105,9 +105,16 @@ export function listProviderSummaries(type = null) {
     id: provider.id,
     type: provider.type,
     name: provider.name,
+    version: String(provider.version || "1.0"),
     capabilities: Array.isArray(provider.capabilities)
       ? [...provider.capabilities]
-      : []
+      : [],
+    supports: {
+      gpu: Boolean(provider.supports?.gpu),
+      cpu: Boolean(provider.supports?.cpu),
+      local: Boolean(provider.supports?.local),
+      remote: Boolean(provider.supports?.remote)
+    }
   }));
 }
 
