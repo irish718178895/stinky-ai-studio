@@ -1,14 +1,13 @@
 import express from "express";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_FILES_DIR } from "../config.js";
 import { readProjects, writeProjects } from "../services/project-store.js";
 import { normalizeRenderSettings, renderProjectVideo } from "../services/ffmpeg/video-renderer.js";
+import { jobs } from "../services/job-manager.js";
 
 const router = express.Router();
 
-const renderJobs = new Map();
 
 router.post("/api/projects/:id/render-video", async (req, res) => {
   try {
@@ -16,20 +15,18 @@ router.post("/api/projects/:id/render-video", async (req, res) => {
     const project = projects.find(item => item.id === req.params.id);
     if (!project) return res.status(404).json({ error: "Project not found." });
     const settings = normalizeRenderSettings(req.body || {});
-    const jobId = crypto.randomUUID();
-    const job = { id: jobId, projectId: project.id, status: "queued", progress: 0, stage: "Queued", createdAt: new Date().toISOString() };
-    renderJobs.set(jobId, job);
+    const job = jobs.create("render", { projectId: project.id });
     res.status(202).json(job);
 
     queueMicrotask(async () => {
       try {
-        job.status = "running";
-        const video = await renderProjectVideo(project, settings, patch => Object.assign(job, patch));
+        jobs.patch(job, { status: "running" });
+        const video = await renderProjectVideo(project, settings, patch => jobs.patch(job, patch));
         await writeProjects(projects);
-        Object.assign(job, { status: "complete", progress: 100, stage: "Complete", video });
+        jobs.patch(job, { status: "complete", progress: 100, stage: "Complete", video });
       } catch (error) {
         console.error(error);
-        Object.assign(job, { status: "error", stage: "Failed", error: error.message });
+        jobs.patch(job, { status: "error", stage: "Failed", error: error.message });
       }
     });
   } catch (error) {
@@ -38,7 +35,7 @@ router.post("/api/projects/:id/render-video", async (req, res) => {
 });
 
 router.get("/api/render-jobs/:jobId", (req, res) => {
-  const job = renderJobs.get(req.params.jobId);
+  const job = jobs.get(req.params.jobId, "render");
   if (!job) return res.status(404).json({ error: "Render job not found." });
   res.json(job);
 });

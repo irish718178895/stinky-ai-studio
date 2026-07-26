@@ -1,14 +1,13 @@
 import express from "express";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_FILES_DIR } from "../config.js";
 import { readProjects, writeProjects } from "../services/project-store.js";
 import { generateForProject } from "../services/comfyui.js";
+import { jobs } from "../services/job-manager.js";
 
 const router = express.Router();
 
-const imageJobs = new Map();
 
 function publicImageJob(job) {
   return {
@@ -30,16 +29,11 @@ function publicImageJob(job) {
 
 async function runSceneImageJob(job, defaults) {
   try {
-    job.status = "running";
-    job.stage = "Preparing scene queue";
-    job.updatedAt = new Date().toISOString();
+    jobs.patch(job, { status: "running", stage: "Preparing scene queue" });
 
     for (let index = 0; index < job.sceneIds.length; index++) {
       if (job.cancelRequested) {
-        job.cancelled = true;
-        job.status = "cancelled";
-        job.stage = "Cancelled after current scene";
-        job.updatedAt = new Date().toISOString();
+        jobs.patch(job, { cancelled: true, status: "cancelled", stage: "Cancelled after current scene" });
         return;
       }
 
@@ -66,7 +60,7 @@ async function runSceneImageJob(job, defaults) {
       job.currentSceneId = scene.id;
       job.stage = `Generating scene ${index + 1} of ${job.total}: ${scene.title}`;
       item.status = "running";
-      job.updatedAt = new Date().toISOString();
+      jobs.patch(job);
 
       try {
         const result = await generateForProject(projects, project, { ...defaults, prompt });
@@ -90,7 +84,7 @@ async function runSceneImageJob(job, defaults) {
 
       job.completed += 1;
       job.progress = Math.round((job.completed / Math.max(1, job.total)) * 100);
-      job.updatedAt = new Date().toISOString();
+      jobs.patch(job);
     }
 
     job.currentSceneId = null;
@@ -98,13 +92,13 @@ async function runSceneImageJob(job, defaults) {
     job.status = failures ? "complete-with-errors" : "complete";
     job.stage = failures ? `Complete with ${failures} failed scene${failures === 1 ? "" : "s"}` : "All scene images complete";
     job.progress = 100;
-    job.updatedAt = new Date().toISOString();
+    jobs.patch(job);
   } catch (error) {
     console.error(error);
     job.status = "error";
     job.stage = "Batch generation failed";
     job.error = error.message;
-    job.updatedAt = new Date().toISOString();
+    jobs.patch(job);
   }
 }
 
@@ -126,23 +120,14 @@ router.post("/api/projects/:id/generate-scene-images", async (req, res) => {
     const missingPrompt = scenes.find(scene => !String(scene.imagePrompt || scene.description || "").trim());
     if (missingPrompt) return res.status(400).json({ error: `Scene “${missingPrompt.title}” has no image prompt.` });
 
-    const jobId = crypto.randomUUID();
-    const job = {
-      id: jobId,
+    const job = jobs.create("image", {
       projectId: project.id,
-      status: "queued",
-      progress: 0,
-      stage: "Queued",
       completed: 0,
       total: scenes.length,
+      currentSceneId: null,
       sceneIds: scenes.map(scene => scene.id),
-      scenes: scenes.map(scene => ({ sceneId: scene.id, title: scene.title, status: "queued", imageId: null, seed: null, error: null })),
-      cancelRequested: false,
-      cancelled: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    imageJobs.set(jobId, job);
+      scenes: scenes.map(scene => ({ sceneId: scene.id, title: scene.title, status: "queued", imageId: null, seed: null, error: null }))
+    });
 
     const defaults = {
       negativePrompt: String(req.body?.negativePrompt || "cartoon, anime, illustration, CGI, blurry, low quality, watermark, logo, text, duplicate person, deformed hands, extra fingers"),
@@ -160,18 +145,16 @@ router.post("/api/projects/:id/generate-scene-images", async (req, res) => {
 });
 
 router.get("/api/image-jobs/:jobId", (req, res) => {
-  const job = imageJobs.get(req.params.jobId);
+  const job = jobs.get(req.params.jobId, "image");
   if (!job) return res.status(404).json({ error: "Image job not found." });
   res.json(publicImageJob(job));
 });
 
 router.post("/api/image-jobs/:jobId/cancel", (req, res) => {
-  const job = imageJobs.get(req.params.jobId);
+  const job = jobs.get(req.params.jobId, "image");
   if (!job) return res.status(404).json({ error: "Image job not found." });
   if (["complete", "complete-with-errors", "cancelled", "error"].includes(job.status)) return res.json(publicImageJob(job));
-  job.cancelRequested = true;
-  job.stage = "Cancellation requested; finishing current scene";
-  job.updatedAt = new Date().toISOString();
+  jobs.requestCancel(job, "Cancellation requested; finishing current scene");
   res.json(publicImageJob(job));
 });
 
