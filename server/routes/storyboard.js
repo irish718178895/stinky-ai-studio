@@ -1,14 +1,13 @@
 import express from "express";
 import crypto from "node:crypto";
 import { OLLAMA_MODEL } from "../config.js";
-import { getProvider } from "../providers/registry.js";
+import { selectProvider } from "../providers/manager.js";
 import {
   readProjects,
   writeProjects
 } from "../services/project-store.js";
 
 const router = express.Router();
-const storyProvider = getProvider("story");
 
 router.post("/api/projects/:id/storyboard", async (req, res) => {
   try {
@@ -20,6 +19,15 @@ router.post("/api/projects/:id/storyboard", async (req, res) => {
         error: "Project not found."
       });
     }
+
+    const storyProvider = selectProvider(
+      "story",
+      project.providers
+    );
+
+    const storySettings = {
+      ...(project.providerSettings?.[storyProvider.id] || {})
+    };
 
     const idea = String(req.body.idea || "").trim();
 
@@ -34,10 +42,27 @@ router.post("/api/projects/:id/storyboard", async (req, res) => {
     const audience = String(
       req.body.audience || "general audience"
     );
-    const model = String(req.body.model || OLLAMA_MODEL);
+
+    const model = String(
+      req.body.model ??
+      storySettings.model ??
+      OLLAMA_MODEL
+    );
+
+    const temperatureValue = Number(
+      req.body.temperature ??
+      storySettings.temperature ??
+      0.7
+    );
+
+    const temperature = Number.isFinite(temperatureValue)
+      ? Math.min(2, Math.max(0, temperatureValue))
+      : 0.7;
 
     const storyboard = await storyProvider.generate({
+      ...storySettings,
       model,
+      temperature,
       idea,
       length,
       style,
@@ -78,6 +103,7 @@ router.post("/api/projects/:id/storyboard", async (req, res) => {
       style,
       audience,
       model,
+      temperature,
       provider: storyProvider.id,
       title: storyboard.title,
       summary: storyboard.summary,

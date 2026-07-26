@@ -1,0 +1,21 @@
+Piper provider discovery/runtime update
+
+From the project root:
+
+  cp server/config.js server/config.js.before-piper-discovery
+  cp server/services/piper.js server/services/piper.js.before-piper-discovery
+  cp server/providers/voice/piper.js server/providers/voice/piper.js.before-piper-discovery
+  cp server/routes/voice.js server/routes/voice.js.before-piper-discovery
+
+Extract this archive over the project root, then run:
+
+  node --check server/config.js
+  node --check server/services/piper.js
+  node --check server/providers/voice/piper.js
+  node --check server/routes/voice.js
+
+Restart Stinky AI Studio and verify:
+
+  curl -s http://127.0.0.1:3000/api/providers | python3 -m json.tool
+
+The Piper provider should advertise voice as type select with installed voice IDs.

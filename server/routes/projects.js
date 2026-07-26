@@ -28,10 +28,18 @@ router.post("/api/projects", async (req, res) => {
       id: crypto.randomUUID(),
       name,
       description: String(req.body.description || "").trim().slice(0, 500),
-      providers: req.body.providers === undefined
-        ? normalizeProviderManifest()
-        : validateProviderManifest(req.body.providers),
-      createdAt: now,
+      providers:
+  req.body.providers === undefined
+    ? normalizeProviderManifest()
+    : validateProviderManifest(req.body.providers),
+
+providerSettings:
+  req.body.providerSettings &&
+  typeof req.body.providerSettings === "object" &&
+  !Array.isArray(req.body.providerSettings)
+    ? structuredClone(req.body.providerSettings)
+    : {},
+	    createdAt: now,
       updatedAt: now,
       images: [],
       videos: [],
@@ -75,7 +83,22 @@ router.patch("/api/projects/:id", async (req, res) => {
         ...req.body.providers
       });
     }
+if (req.body.providerSettings !== undefined) {
+  if (
+    !req.body.providerSettings ||
+    typeof req.body.providerSettings !== "object" ||
+    Array.isArray(req.body.providerSettings)
+  ) {
+    return res.status(400).json({
+      error: "providerSettings must be an object."
+    });
+  }
 
+  project.providerSettings = {
+    ...(project.providerSettings || {}),
+    ...structuredClone(req.body.providerSettings)
+  };
+}
     project.updatedAt = new Date().toISOString();
     await writeProjects(projects);
     res.json(publicProject(project));

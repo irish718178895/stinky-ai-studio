@@ -210,6 +210,55 @@
       </div>
       <label>Project name<input id="projectName" maxlength="100" required placeholder="Railroad Commercial"></label>
       <label>Description<textarea id="projectDesc" rows="3" maxlength="500" placeholder="Optional campaign notes"></textarea></label>
+
+<fieldset class="provider-settings">
+  <legend>Execution Providers</legend>
+
+  <div class="provider-card">
+    <label>
+      Image Provider
+      <select id="projectImageProvider"></select>
+    </label>
+    <div
+      id="projectImageProviderSettings"
+      class="provider-fields">
+    </div>
+  </div>
+
+  <div class="provider-card">
+    <label>
+      Story Provider
+      <select id="projectStoryProvider"></select>
+    </label>
+    <div
+      id="projectStoryProviderSettings"
+      class="provider-fields">
+    </div>
+  </div>
+
+  <div class="provider-card">
+    <label>
+      Voice Provider
+      <select id="projectVoiceProvider"></select>
+    </label>
+    <div
+      id="projectVoiceProviderSettings"
+      class="provider-fields">
+    </div>
+  </div>
+
+  <div class="provider-card">
+    <label>
+      Render Provider
+      <select id="projectRenderProvider"></select>
+    </label>
+    <div
+      id="projectRenderProviderSettings"
+      class="provider-fields">
+    </div>
+  </div>
+</fieldset>
+
       <p id="projectError" class="error"></p>
       <div class="dialog-actions">
         <button id="cancelProject" type="button" class="secondary">Cancel</button>

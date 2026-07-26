@@ -67,6 +67,40 @@ dialog::backdrop { background: rgba(0,0,0,.75); }
 .dialog-form { width: min(500px, calc(100vw - 50px)); padding: 12px; }
 .dialog-form h3 { margin: 0; font-size: 2rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.provider-settings {
+  margin: 4px 0 8px;
+  padding: 16px;
+  border: 1px solid #594b3d;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.provider-settings legend {
+  padding: 0 8px;
+  color: #c9b89f;
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.provider-settings label {
+  display: grid;
+  gap: 7px;
+}
+
+.provider-settings select {
+  width: 100%;
+}
+
+@media (max-width: 620px) {
+  .provider-settings {
+    grid-template-columns: 1fr;
+  }
+}
 .error { min-height: 1.2em; margin: 0; color: #ff9d92; }
 .image-dialog { width: min(1000px, calc(100vw - 40px)); max-height: 94vh; padding: 18px; }
 .image-dialog img { display: block; max-width: 100%; max-height: 70vh; margin: auto; border-radius: 8px; }

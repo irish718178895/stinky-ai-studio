@@ -547,32 +547,23 @@ function showProjectDialog(project = null) {
   state.editingProjectId = project?.id || null;
   projectForm.reset();
   projectError.textContent = "";
-
-  byId("projectDialogEyebrow").textContent =
-    project ? "EDIT PROJECT" : "NEW PROJECT";
-
-  byId("projectDialogTitle").textContent =
-    project ? "Edit project" : "Create a project";
-
-  byId("saveProjectButton").textContent =
-    project ? "Save changes" : "Create project";
-
+  byId("projectDialogEyebrow").textContent = project ? "EDIT PROJECT" : "NEW PROJECT";
+  byId("projectDialogTitle").textContent = project ? "Edit project" : "Create a project";
+  byId("saveProjectButton").textContent = project ? "Save changes" : "Create project";
   byId("projectName").value = project?.name || "";
   byId("projectDesc").value = project?.description || "";
-
   populateProviderSelect(
     "projectImageProvider",
     "image",
     project?.providers?.image
   );
-
-  renderProviderSettings(
-    "image",
-    byId("projectImageProvider").value,
-    project?.providerSettings?.[
-      byId("projectImageProvider").value
-    ] || {}
-  );
+	renderProviderSettings(
+  "image",
+  byId("projectImageProvider").value,
+  project?.providerSettings?.[
+    byId("projectImageProvider").value
+  ]
+);
 
   populateProviderSelect(
     "projectStoryProvider",
@@ -580,27 +571,27 @@ function showProjectDialog(project = null) {
     project?.providers?.story
   );
 
-  renderProviderSettings(
-    "story",
-    byId("projectStoryProvider").value,
-    project?.providerSettings?.[
-      byId("projectStoryProvider").value
-    ] || {}
-  );
+renderProviderSettings(
+  "image",
+  byId("projectImageProvider").value,
+  project?.providerSettings?.[
+    byId("projectImageProvider").value
+  ]
+);  
 
-  populateProviderSelect(
+populateProviderSelect(
     "projectVoiceProvider",
     "voice",
     project?.providers?.voice
   );
 
-  renderProviderSettings(
-    "voice",
-    byId("projectVoiceProvider").value,
-    project?.providerSettings?.[
-      byId("projectVoiceProvider").value
-    ] || {}
-  );
+renderProviderSettings(
+  "image",
+  byId("projectImageProvider").value,
+  project?.providerSettings?.[
+    byId("projectImageProvider").value
+  ]
+);
 
   populateProviderSelect(
     "projectRenderProvider",
@@ -608,125 +599,67 @@ function showProjectDialog(project = null) {
     project?.providers?.render
   );
 
-  renderProviderSettings(
-    "render",
-    byId("projectRenderProvider").value,
-    project?.providerSettings?.[
-      byId("projectRenderProvider").value
-    ] || {}
-  );
-
-  projectDialog.showModal();
+renderProviderSettings(
+  "image",
+  byId("projectImageProvider").value,
+  project?.providerSettings?.[
+    byId("projectImageProvider").value
+  ]
+);
+	projectDialog.showModal();
   setTimeout(() => byId("projectName").focus(), 0);
 }
 
 function renderProviderSettings(type, providerId, values = {}) {
+
   const container = byId(
     `project${type.charAt(0).toUpperCase() + type.slice(1)}ProviderSettings`
   );
 
   container.innerHTML = "";
 
-  const provider = (providerCatalog.providers[type] || [])
-    .find(item => item.id === providerId);
+  const provider =
+    (providerCatalog.providers[type] || [])
+      .find(p => p.id === providerId);
 
-  if (!provider || !Array.isArray(provider.settingsSchema)) {
+  if (!provider || !provider.settingsSchema?.length) {
     return;
   }
 
   for (const setting of provider.settingsSchema) {
-    const label = document.createElement("label");
-    label.textContent = setting.label || setting.key;
 
-    const currentValue =
+    const label = document.createElement("label");
+
+    label.textContent = setting.label;
+
+    const input = document.createElement("input");
+
+    input.dataset.provider = provider.id;
+    input.dataset.setting = setting.key;
+
+    input.type = setting.type === "number"
+      ? "number"
+      : "text";
+
+    input.value =
       values[setting.key] ??
       setting.default ??
       "";
 
-    let control;
+    if (setting.min !== undefined)
+      input.min = setting.min;
 
-    if (setting.type === "select") {
-      control = document.createElement("select");
+    if (setting.max !== undefined)
+      input.max = setting.max;
 
-      const options = Array.isArray(setting.options)
-        ? setting.options
-        : [];
+    if (setting.step !== undefined)
+      input.step = setting.step;
 
-      // Preserve a previously saved value even when the provider no longer
-      // advertises it, so editing a project does not silently discard it.
-      const normalizedCurrentValue = String(currentValue ?? "");
-      const normalizedOptions = options.map(option =>
-        typeof option === "object" && option !== null
-          ? String(option.value ?? "")
-          : String(option)
-      );
+    label.append(input);
 
-      if (
-        normalizedCurrentValue &&
-        !normalizedOptions.includes(normalizedCurrentValue)
-      ) {
-        const legacyOption = document.createElement("option");
-        legacyOption.value = normalizedCurrentValue;
-        legacyOption.textContent = `${normalizedCurrentValue} (saved)`;
-        control.append(legacyOption);
-      }
-
-      for (const optionDefinition of options) {
-        const option = document.createElement("option");
-
-        if (
-          typeof optionDefinition === "object" &&
-          optionDefinition !== null
-        ) {
-          option.value = String(optionDefinition.value ?? "");
-          option.textContent = String(
-            optionDefinition.label ?? optionDefinition.value ?? ""
-          );
-          option.disabled = Boolean(optionDefinition.disabled);
-        } else {
-          option.value = String(optionDefinition);
-          option.textContent = String(optionDefinition);
-        }
-
-        control.append(option);
-      }
-
-      if (!control.options.length) {
-        const unavailableOption = document.createElement("option");
-        unavailableOption.value = normalizedCurrentValue;
-        unavailableOption.textContent = normalizedCurrentValue || "No options available";
-        control.append(unavailableOption);
-      }
-
-      control.value = normalizedCurrentValue;
-    } else {
-      control = document.createElement("input");
-      control.type = setting.type === "number" ? "number" : "text";
-      control.value = currentValue;
-
-      if (setting.min !== undefined) {
-        control.min = setting.min;
-      }
-
-      if (setting.max !== undefined) {
-        control.max = setting.max;
-      }
-
-      if (setting.step !== undefined) {
-        control.step = setting.step;
-      }
-    }
-
-    control.dataset.provider = provider.id;
-    control.dataset.setting = setting.key;
-
-    if (setting.placeholder !== undefined && "placeholder" in control) {
-      control.placeholder = setting.placeholder;
-    }
-
-    label.append(control);
     container.append(label);
   }
+
 }
 
 function collectProviderSettings() {

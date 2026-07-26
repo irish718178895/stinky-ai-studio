@@ -630,101 +630,64 @@ function renderProviderSettings(type, providerId, values = {}) {
   const provider = (providerCatalog.providers[type] || [])
     .find(item => item.id === providerId);
 
-  if (!provider || !Array.isArray(provider.settingsSchema)) {
+  if (!provider || !provider.settingsSchema?.length) {
     return;
   }
 
   for (const setting of provider.settingsSchema) {
     const label = document.createElement("label");
-    label.textContent = setting.label || setting.key;
+    label.textContent = setting.label;
 
-    const currentValue =
-      values[setting.key] ??
-      setting.default ??
-      "";
+    const selectedValue = String(
+      values[setting.key] ?? setting.default ?? ""
+    );
 
-    let control;
+    let input;
 
     if (setting.type === "select") {
-      control = document.createElement("select");
+      input = document.createElement("select");
 
       const options = Array.isArray(setting.options)
         ? setting.options
         : [];
 
-      // Preserve a previously saved value even when the provider no longer
-      // advertises it, so editing a project does not silently discard it.
-      const normalizedCurrentValue = String(currentValue ?? "");
-      const normalizedOptions = options.map(option =>
-        typeof option === "object" && option !== null
-          ? String(option.value ?? "")
-          : String(option)
-      );
-
-      if (
-        normalizedCurrentValue &&
-        !normalizedOptions.includes(normalizedCurrentValue)
-      ) {
-        const legacyOption = document.createElement("option");
-        legacyOption.value = normalizedCurrentValue;
-        legacyOption.textContent = `${normalizedCurrentValue} (saved)`;
-        control.append(legacyOption);
-      }
-
-      for (const optionDefinition of options) {
+      if (!options.length) {
         const option = document.createElement("option");
-
-        if (
-          typeof optionDefinition === "object" &&
-          optionDefinition !== null
-        ) {
-          option.value = String(optionDefinition.value ?? "");
-          option.textContent = String(
-            optionDefinition.label ?? optionDefinition.value ?? ""
-          );
-          option.disabled = Boolean(optionDefinition.disabled);
-        } else {
-          option.value = String(optionDefinition);
-          option.textContent = String(optionDefinition);
+        option.value = selectedValue;
+        option.textContent = selectedValue || "No options discovered";
+        input.append(option);
+        input.disabled = !selectedValue;
+      } else {
+        if (selectedValue && !options.includes(selectedValue)) {
+          const option = document.createElement("option");
+          option.value = selectedValue;
+          option.textContent = `${selectedValue} (saved)`;
+          input.append(option);
         }
 
-        control.append(option);
+        for (const value of options) {
+          const option = document.createElement("option");
+          option.value = String(value);
+          option.textContent = String(value);
+          input.append(option);
+        }
       }
 
-      if (!control.options.length) {
-        const unavailableOption = document.createElement("option");
-        unavailableOption.value = normalizedCurrentValue;
-        unavailableOption.textContent = normalizedCurrentValue || "No options available";
-        control.append(unavailableOption);
-      }
-
-      control.value = normalizedCurrentValue;
+      input.value = selectedValue || String(options[0] || "");
     } else {
-      control = document.createElement("input");
-      control.type = setting.type === "number" ? "number" : "text";
-      control.value = currentValue;
+      input = document.createElement("input");
+      input.type = setting.type === "number" ? "number" : "text";
+      input.value = selectedValue;
 
-      if (setting.min !== undefined) {
-        control.min = setting.min;
-      }
-
-      if (setting.max !== undefined) {
-        control.max = setting.max;
-      }
-
-      if (setting.step !== undefined) {
-        control.step = setting.step;
-      }
+      if (setting.min !== undefined) input.min = setting.min;
+      if (setting.max !== undefined) input.max = setting.max;
+      if (setting.step !== undefined) input.step = setting.step;
     }
 
-    control.dataset.provider = provider.id;
-    control.dataset.setting = setting.key;
+    input.dataset.provider = provider.id;
+    input.dataset.setting = setting.key;
 
-    if (setting.placeholder !== undefined && "placeholder" in control) {
-      control.placeholder = setting.placeholder;
-    }
-
-    label.append(control);
+    label.append(input);
     container.append(label);
   }
 }

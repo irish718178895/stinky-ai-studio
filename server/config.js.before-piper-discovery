@@ -15,8 +15,7 @@ export const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 export const PROJECT_FILES_DIR = path.join(DATA_DIR, "projects");
 export const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 export const PIPER_COMMAND = process.env.PIPER_COMMAND || path.join(ROOT_DIR, ".venv-piper", "bin", "piper");
-export const PIPER_VOICES_DIR = process.env.PIPER_VOICES_DIR || path.join(ROOT_DIR, "voices");
-export const PIPER_MODEL = process.env.PIPER_MODEL || path.join(PIPER_VOICES_DIR, "en_US-lessac-medium.onnx");
+export const PIPER_MODEL = process.env.PIPER_MODEL || path.join(ROOT_DIR, "voices", "en_US-lessac-medium.onnx");
 export const RESOLUTIONS = {
   "720p": { width: 1280, height: 720 },
   "1080p": { width: 1920, height: 1080 }

@@ -1,0 +1,66 @@
+import {
+  requirePiper,
+  synthesizeSceneVoice
+} from "../../services/piper.js";
+
+export const piperProvider = {
+  id: "piper",
+  type: "voice",
+  name: "Piper",
+  version: "1.0",
+
+settingsSchema: [
+  {
+    key: "voice",
+    label: "Voice",
+    type: "text",
+    default: "en_US-lessac-medium"
+  },
+  {
+    key: "lengthScale",
+    label: "Speed",
+    type: "number",
+    default: 1,
+    min: 0.5,
+    max: 2,
+    step: 0.1
+  }
+],
+
+  capabilities: Object.freeze([
+    "tts",
+    "batch"
+  ]),
+
+  supports: Object.freeze({
+    gpu: false,
+    cpu: true,
+    local: true,
+    remote: false
+  }),
+
+  async health() {
+    try {
+      await requirePiper();
+
+      return {
+        available: true,
+        provider: "piper"
+      };
+    } catch (error) {
+      return {
+        available: false,
+        provider: "piper",
+        error: error.message
+      };
+    }
+  },
+
+  async synthesize(project, scene, lengthScale = 1) {
+    return synthesizeSceneVoice(
+      project,
+      scene,
+      lengthScale
+    );
+  }
+};

@@ -27,8 +27,16 @@ function normalizeScene(scene, index, defaultDuration) {
   };
 }
 
-export async function generateStoryboard({ ollamaUrl, model, idea, length, style, audience }) {
-  const targetSeconds = [15, 30, 60].includes(Number(length)) ? Number(length) : 30;
+export async function generateStoryboard({
+  ollamaUrl,
+  model,
+  temperature = 0.7,
+  idea,
+  length,
+  style,
+  audience
+}) {  
+const targetSeconds = [15, 30, 60].includes(Number(length)) ? Number(length) : 30;
   const sceneCount = targetSeconds === 15 ? 3 : targetSeconds === 60 ? 8 : 5;
   const defaultDuration = targetSeconds / sceneCount;
   const system = `You are a commercial storyboard director. Return ONLY valid JSON with this shape:
@@ -52,7 +60,9 @@ Keep it practical for a local image-to-video workflow using one still image per 
           { role: "system", content: system },
           { role: "user", content: prompt }
         ],
-        options: { temperature: 0.7 }
+      options: {
+  temperature
+}
       })
     });
   } catch (error) {

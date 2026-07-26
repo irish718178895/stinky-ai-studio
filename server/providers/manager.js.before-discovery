@@ -93,54 +93,6 @@ export function selectProvider(type, manifest = {}) {
   return getProvider(type, normalized[type]);
 }
 
-
-function applyMetadataToSchema(settingsSchema, metadata = {}) {
-  const overrides = metadata?.settings && typeof metadata.settings === "object"
-    ? metadata.settings
-    : {};
-
-  return settingsSchema.map(setting => ({
-    ...setting,
-    ...(overrides[setting.key] || {})
-  }));
-}
-
-async function summarizeProvider(provider) {
-  const baseSchema = Array.isArray(provider.settingsSchema)
-    ? structuredClone(provider.settingsSchema)
-    : [];
-
-  let metadata = {};
-  let metadataError = null;
-
-  if (typeof provider.metadata === "function") {
-    try {
-      metadata = await provider.metadata();
-    } catch (error) {
-      metadataError = error.message;
-    }
-  }
-
-  return {
-    id: provider.id,
-    type: provider.type,
-    name: provider.name,
-    version: String(provider.version || "1.0"),
-    capabilities: Array.isArray(provider.capabilities)
-      ? [...provider.capabilities]
-      : [],
-    supports: {
-      gpu: Boolean(provider.supports?.gpu),
-      cpu: Boolean(provider.supports?.cpu),
-      local: Boolean(provider.supports?.local),
-      remote: Boolean(provider.supports?.remote)
-    },
-    settingsSchema: applyMetadataToSchema(baseSchema, metadata),
-    metadata,
-    metadataError
-  };
-}
-
 /**
  * Return provider metadata suitable for API responses and future UI use.
  */
@@ -163,18 +115,10 @@ export function listProviderSummaries(type = null) {
       local: Boolean(provider.supports?.local),
       remote: Boolean(provider.supports?.remote)
     },
-    settingsSchema: Array.isArray(provider.settingsSchema)
-      ? structuredClone(provider.settingsSchema)
-      : []
+	  settingsSchema: Array.isArray(provider.settingsSchema)
+  ? structuredClone(provider.settingsSchema)
+  : []
   }));
-}
-
-export async function listProviderSummariesWithMetadata(type = null) {
-  if (type !== null && !PROVIDER_TYPES.includes(type)) {
-    throw new Error(`Unsupported provider type "${type}".`);
-  }
-
-  return Promise.all(listProviders(type).map(summarizeProvider));
 }
 
 /**
@@ -228,6 +172,5 @@ export const providerManager = Object.freeze({
   validate: validateProviderManifest,
   select: selectProvider,
   list: listProviderSummaries,
-  discover: listProviderSummariesWithMetadata,
   health: checkProviderHealth
 });

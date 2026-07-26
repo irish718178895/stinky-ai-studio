@@ -14,9 +14,9 @@ function groupProvidersByType(providers) {
   );
 }
 
-router.get("/api/providers", async (_req, res) => {
+router.get("/api/providers", (_req, res) => {
   try {
-    const providers = await providerManager.discover();
+    const providers = providerManager.list();
 
     res.json({
       defaults: {

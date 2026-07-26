@@ -9,6 +9,30 @@ export const ffmpegProvider = {
   name: "FFmpeg",
   version: "1.0",
 
+settingsSchema: [
+  {
+    key: "encoder",
+    label: "Encoder",
+    type: "text",
+    default: "nvenc"
+  },
+  {
+    key: "resolution",
+    label: "Resolution",
+    type: "text",
+    default: "1080p"
+  },
+  {
+    key: "fps",
+    label: "FPS",
+    type: "number",
+    default: 60,
+    min: 1,
+    max: 120,
+    step: 1
+  }
+],
+
   capabilities: Object.freeze([
     "video-render",
     "music",

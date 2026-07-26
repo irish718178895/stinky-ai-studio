@@ -1,0 +1,110 @@
+[1mdiff --git a/server/routes/images.js b/server/routes/images.js[m
+[1mindex 226fab4..c11495c 100644[m
+[1m--- a/server/routes/images.js[m
+[1m+++ b/server/routes/images.js[m
+[36m@@ -3,9 +3,11 @@[m [mimport fs from "node:fs/promises";[m
+ import path from "node:path";[m
+ import { PROJECT_FILES_DIR } from "../config.js";[m
+ import { readProjects, writeProjects } from "../services/project-store.js";[m
+[31m-import { generateForProject } from "../services/comfyui.js";[m
+[32m+[m[32mimport { getProvider } from "../providers/registry.js";[m
+ import { jobs } from "../services/job-manager.js";[m
+ [m
+[32m+[m[32mconst imageProvider = getProvider("image");[m
+[32m+[m
+ const router = express.Router();[m
+ [m
+ [m
+[36m@@ -63,7 +65,7 @@[m [masync function runSceneImageJob(job, defaults) {[m
+       jobs.patch(job);[m
+ [m
+       try {[m
+[31m-        const result = await generateForProject(projects, project, { ...defaults, prompt });[m
+[32m+[m[32m        const result = await imageProvider.generate(projects, project, { ...defaults, prompt });[m
+         const generated = result.images[0];[m
+         const refreshedProjects = await readProjects();[m
+         const refreshedProject = refreshedProjects.find(entry => entry.id === job.projectId);[m
+[36m@@ -163,7 +165,7 @@[m [mrouter.post("/api/projects/:id/generate", async (req, res) => {[m
+     const projects = await readProjects();[m
+     const project = projects.find(item => item.id === req.params.id);[m
+     if (!project) return res.status(404).json({ error: "Project not found." });[m
+[31m-    res.json(await generateForProject(projects, project, req.body));[m
+[32m+[m[32m    res.json(await imageProvider.generate(projects, project, req.body));[m
+   } catch (error) {[m
+     console.error(error);[m
+     const status = error.message === "Prompt is required." ? 400 : 500;[m
+[36m@@ -188,7 +190,7 @@[m [mrouter.post("/api/projects/:projectId/images/:imageId/regenerate", async (req, r[m
+       cfg: image.cfg,[m
+       seed: req.body?.randomSeed ? undefined : image.seed[m
+     };[m
+[31m-    res.json(await generateForProject(projects, project, settings, image.id));[m
+[32m+[m[32m    res.json(await imageProvider.generate(projects, project, settings, image.id));[m
+   } catch (error) {[m
+     console.error(error);[m
+     res.status(500).json({ error: error.message });[m
+[1mdiff --git a/server/routes/render.js b/server/routes/render.js[m
+[1mindex 63ddd3d..8535ae4 100644[m
+[1m--- a/server/routes/render.js[m
+[1m+++ b/server/routes/render.js[m
+[36m@@ -3,9 +3,11 @@[m [mimport fs from "node:fs/promises";[m
+ import path from "node:path";[m
+ import { PROJECT_FILES_DIR } from "../config.js";[m
+ import { readProjects, writeProjects } from "../services/project-store.js";[m
+[31m-import { normalizeRenderSettings, renderProjectVideo } from "../services/ffmpeg/video-renderer.js";[m
+[32m+[m[32mimport { getProvider } from "../providers/registry.js";[m
+ import { jobs } from "../services/job-manager.js";[m
+ [m
+[32m+[m[32mconst renderProvider = getProvider("render");[m
+[32m+[m
+ const router = express.Router();[m
+ [m
+ [m
+[36m@@ -14,14 +16,14 @@[m [mrouter.post("/api/projects/:id/render-video", async (req, res) => {[m
+     const projects = await readProjects();[m
+     const project = projects.find(item => item.id === req.params.id);[m
+     if (!project) return res.status(404).json({ error: "Project not found." });[m
+[31m-    const settings = normalizeRenderSettings(req.body || {});[m
+[32m+[m[32m    const settings = renderProvider.normalizeSettings(req.body || {});[m
+     const job = jobs.create("render", { projectId: project.id });[m
+     res.status(202).json(job);[m
+ [m
+     queueMicrotask(async () => {[m
+       try {[m
+         jobs.patch(job, { status: "running" });[m
+[31m-        const video = await renderProjectVideo(project, settings, patch => jobs.patch(job, patch));[m
+[32m+[m[32m        const video = await renderProvider.render(project, settings, patch => jobs.patch(job, patch));[m
+         await writeProjects(projects);[m
+         jobs.patch(job, { status: "complete", progress: 100, stage: "Complete", video });[m
+       } catch (error) {[m
+[1mdiff --git a/server/routes/voice.js b/server/routes/voice.js[m
+[1mindex 3b5d82a..ff362b5 100644[m
+[1m--- a/server/routes/voice.js[m
+[1m+++ b/server/routes/voice.js[m
+[36m@@ -1,6 +1,8 @@[m
+ import express from "express";[m
+ import { readProjects, writeProjects } from "../services/project-store.js";[m
+[31m-import { synthesizeSceneVoice } from "../services/piper.js";[m
+[32m+[m[32mimport { getProvider } from "../providers/registry.js";[m
+[32m+[m
+[32m+[m[32mconst voiceProvider = getProvider("voice");[m
+ [m
+ const router = express.Router();[m
+ [m
+[36m@@ -11,7 +13,7 @@[m [mrouter.post("/api/projects/:projectId/scenes/:sceneId/voice", async (req, res) =[m
+     if (!project) return res.status(404).json({ error: "Project not found." });[m
+     const scene = project.scenes.find(item => item.id === req.params.sceneId);[m
+     if (!scene) return res.status(404).json({ error: "Scene not found." });[m
+[31m-    await synthesizeSceneVoice(project, scene, req.body.lengthScale);[m
+[32m+[m[32m    await voiceProvider.synthesize(project, scene, req.body.lengthScale);[m
+     await writeProjects(projects);[m
+     res.json(scene);[m
+   } catch (error) {[m
+[36m@@ -31,7 +33,7 @@[m [mrouter.post("/api/projects/:projectId/generate-scene-voices", async (req, res) =[m
+     const results = [];[m
+     for (const scene of scenes) {[m
+       try {[m
+[31m-        await synthesizeSceneVoice(project, scene, req.body.lengthScale);[m
+[32m+[m[32m        await voiceProvider.synthesize(project, scene, req.body.lengthScale);[m
+         results.push({ sceneId: scene.id, title: scene.title, ok: true, voiceUrl: scene.voiceUrl });[m
+       } catch (error) {[m
+         results.push({ sceneId: scene.id, title: scene.title, ok: false, error: error.message });[m

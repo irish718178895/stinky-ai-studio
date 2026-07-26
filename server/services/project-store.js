@@ -32,6 +32,12 @@ export function normalizeProject(project) {
   return {
     ...project,
     providers: normalizeProviderManifest(project.providers),
+	  providerSettings:
+  project.providerSettings &&
+  typeof project.providerSettings === "object" &&
+  !Array.isArray(project.providerSettings)
+    ? structuredClone(project.providerSettings)
+    : {},
     images,
     videos: Array.isArray(project.videos) ? project.videos : [],
     musicTracks: Array.isArray(project.musicTracks) ? project.musicTracks : [],
