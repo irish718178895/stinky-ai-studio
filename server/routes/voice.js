@@ -1,6 +1,8 @@
 import express from "express";
 import { readProjects, writeProjects } from "../services/project-store.js";
-import { synthesizeSceneVoice } from "../services/piper.js";
+import { getProvider } from "../providers/registry.js";
+
+const voiceProvider = getProvider("voice");
 
 const router = express.Router();
 
@@ -11,7 +13,7 @@ router.post("/api/projects/:projectId/scenes/:sceneId/voice", async (req, res) =
     if (!project) return res.status(404).json({ error: "Project not found." });
     const scene = project.scenes.find(item => item.id === req.params.sceneId);
     if (!scene) return res.status(404).json({ error: "Scene not found." });
-    await synthesizeSceneVoice(project, scene, req.body.lengthScale);
+    await voiceProvider.synthesize(project, scene, req.body.lengthScale);
     await writeProjects(projects);
     res.json(scene);
   } catch (error) {
@@ -31,7 +33,7 @@ router.post("/api/projects/:projectId/generate-scene-voices", async (req, res) =
     const results = [];
     for (const scene of scenes) {
       try {
-        await synthesizeSceneVoice(project, scene, req.body.lengthScale);
+        await voiceProvider.synthesize(project, scene, req.body.lengthScale);
         results.push({ sceneId: scene.id, title: scene.title, ok: true, voiceUrl: scene.voiceUrl });
       } catch (error) {
         results.push({ sceneId: scene.id, title: scene.title, ok: false, error: error.message });

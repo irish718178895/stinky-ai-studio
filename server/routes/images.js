@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_FILES_DIR } from "../config.js";
 import { readProjects, writeProjects } from "../services/project-store.js";
-import { generateForProject } from "../services/comfyui.js";
+import { getProvider } from "../providers/registry.js";
 import { jobs } from "../services/job-manager.js";
+
+const imageProvider = getProvider("image");
 
 const router = express.Router();
 
@@ -63,7 +65,7 @@ async function runSceneImageJob(job, defaults) {
       jobs.patch(job);
 
       try {
-        const result = await generateForProject(projects, project, { ...defaults, prompt });
+        const result = await imageProvider.generate(projects, project, { ...defaults, prompt });
         const generated = result.images[0];
         const refreshedProjects = await readProjects();
         const refreshedProject = refreshedProjects.find(entry => entry.id === job.projectId);
@@ -163,7 +165,7 @@ router.post("/api/projects/:id/generate", async (req, res) => {
     const projects = await readProjects();
     const project = projects.find(item => item.id === req.params.id);
     if (!project) return res.status(404).json({ error: "Project not found." });
-    res.json(await generateForProject(projects, project, req.body));
+    res.json(await imageProvider.generate(projects, project, req.body));
   } catch (error) {
     console.error(error);
     const status = error.message === "Prompt is required." ? 400 : 500;
@@ -188,7 +190,7 @@ router.post("/api/projects/:projectId/images/:imageId/regenerate", async (req, r
       cfg: image.cfg,
       seed: req.body?.randomSeed ? undefined : image.seed
     };
-    res.json(await generateForProject(projects, project, settings, image.id));
+    res.json(await imageProvider.generate(projects, project, settings, image.id));
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message });

@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_FILES_DIR } from "../config.js";
 import { readProjects, writeProjects } from "../services/project-store.js";
-import { normalizeRenderSettings, renderProjectVideo } from "../services/ffmpeg/video-renderer.js";
+import { getProvider } from "../providers/registry.js";
 import { jobs } from "../services/job-manager.js";
+
+const renderProvider = getProvider("render");
 
 const router = express.Router();
 
@@ -14,14 +16,14 @@ router.post("/api/projects/:id/render-video", async (req, res) => {
     const projects = await readProjects();
     const project = projects.find(item => item.id === req.params.id);
     if (!project) return res.status(404).json({ error: "Project not found." });
-    const settings = normalizeRenderSettings(req.body || {});
+    const settings = renderProvider.normalizeSettings(req.body || {});
     const job = jobs.create("render", { projectId: project.id });
     res.status(202).json(job);
 
     queueMicrotask(async () => {
       try {
         jobs.patch(job, { status: "running" });
-        const video = await renderProjectVideo(project, settings, patch => jobs.patch(job, patch));
+        const video = await renderProvider.render(project, settings, patch => jobs.patch(job, patch));
         await writeProjects(projects);
         jobs.patch(job, { status: "complete", progress: 100, stage: "Complete", video });
       } catch (error) {
