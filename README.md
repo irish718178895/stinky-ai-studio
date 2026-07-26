@@ -47,6 +47,10 @@ External engine code now lives under `server/services/`, while shared child-proc
 
 HTTP endpoints are organized under `server/routes/`, while `server/app.js` handles application assembly and startup.
 
-## v0.11.3 shared job architecture
+## v0.11.4 shared job architecture
 
 Image generation and video rendering now use `server/services/job-manager.js` for consistent job creation, progress updates, cancellation state, timestamps, errors, and retention cleanup. Existing browser API contracts remain compatible.
+
+## v0.11.4 frontend architecture
+
+Browser-side foundations now live under `public/js/`, separating API access, state, DOM references, and generic UI helpers from the feature coordinator in `public/app.js`.

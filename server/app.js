@@ -28,7 +28,7 @@ app.use(renderRoutes);
 
 await ensureStorage();
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`Stinky AI Studio v0.11.3: http://127.0.0.1:${PORT}`);
+  console.log(`Stinky AI Studio v0.11.4: http://127.0.0.1:${PORT}`);
   console.log(`ComfyUI API: ${COMFY_URL}`);
   console.log(`Checkpoint: ${CHECKPOINT}`);
   console.log(`Ollama: ${OLLAMA_URL} (${OLLAMA_MODEL})`);
