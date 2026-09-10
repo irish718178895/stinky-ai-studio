@@ -2,6 +2,7 @@ import { comfyuiProvider } from "./image/comfyui.js";
 import { piperProvider } from "./voice/piper.js";
 import { ffmpegProvider } from "./render/ffmpeg.js";
 import { ollamaProvider } from "./story/ollama.js";
+import { echomimicProvider } from "./animation/echomimic.js";
 
 const providerRegistry = new Map();
 
@@ -80,3 +81,4 @@ registerProvider(comfyuiProvider);
 registerProvider(piperProvider);
 registerProvider(ffmpegProvider);
 registerProvider(ollamaProvider);
+registerProvider(echomimicProvider);

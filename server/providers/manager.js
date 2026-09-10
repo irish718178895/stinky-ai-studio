@@ -8,14 +8,16 @@ export const PROVIDER_TYPES = Object.freeze([
   "image",
   "story",
   "voice",
-  "render"
+  "render",
+  "animation"
 ]);
 
 export const DEFAULT_PROVIDER_IDS = Object.freeze({
   image: "comfyui",
   story: "ollama",
   voice: "piper",
-  render: "ffmpeg"
+  render: "ffmpeg",
+  animation: "echomimic"
 });
 
 function cleanProviderId(value) {

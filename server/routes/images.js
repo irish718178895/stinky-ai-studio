@@ -284,7 +284,7 @@ router.post(
         ),
 
         width: Math.min(
-          768,
+          1024,
           Math.max(
             256,
             Number(req.body?.width) || 512
@@ -292,7 +292,7 @@ router.post(
         ),
 
         height: Math.min(
-          768,
+          1024,
           Math.max(
             256,
             Number(req.body?.height) || 512
@@ -389,6 +389,131 @@ router.post(
     res.json(publicImageJob(job));
   }
 );
+
+
+router.post(
+  "/api/projects/:projectId/images/upload",
+  async (req, res) => {
+    try {
+      const projects = await readProjects();
+
+      const project = projects.find(
+        item => item.id === req.params.projectId
+      );
+
+      if (!project) {
+        return res.status(404).json({
+          error: "Project not found."
+        });
+      }
+
+      const dataUrl = String(req.body?.dataUrl || "");
+      const originalName = String(
+        req.body?.filename || "uploaded-image"
+      ).slice(0, 255);
+
+      const match = dataUrl.match(
+        /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)$/
+      );
+
+      if (!match) {
+        return res.status(400).json({
+          error: "Upload must be a PNG, JPG, or WebP image."
+        });
+      }
+
+      const mimeType = match[1];
+      const buffer = Buffer.from(
+        match[2].replace(/\s/g, ""),
+        "base64"
+      );
+
+      if (!buffer.length) {
+        return res.status(400).json({
+          error: "Uploaded image is empty."
+        });
+      }
+
+      if (buffer.length > 25 * 1024 * 1024) {
+        return res.status(413).json({
+          error: "Image is larger than the 25 MB upload limit."
+        });
+      }
+
+      const extension =
+        mimeType === "image/png"
+          ? "png"
+          : mimeType === "image/webp"
+            ? "webp"
+            : "jpg";
+
+      const crypto = await import("node:crypto");
+      const imageId = crypto.randomUUID();
+
+      const projectDir = path.join(
+        PROJECT_FILES_DIR,
+        project.id
+      );
+
+      await fs.mkdir(projectDir, {
+        recursive: true
+      });
+
+      const filename =
+        `upload-${imageId}.${extension}`;
+
+      const filePath = path.join(
+        projectDir,
+        filename
+      );
+
+      await fs.writeFile(
+        filePath,
+        buffer
+      );
+
+      const now = new Date().toISOString();
+
+      const image = {
+        id: imageId,
+        filename,
+        originalName,
+        url: `/generated/${project.id}/${filename}`,
+        prompt: `Uploaded image: ${originalName}`,
+        negativePrompt: "",
+        seed: null,
+        width: null,
+        height: null,
+        steps: null,
+        cfg: null,
+        checkpoint: "uploaded",
+        sampler: null,
+        kind: "uploaded",
+        mimeType,
+        fileSize: buffer.length,
+        createdAt: now
+      };
+
+      project.images = project.images || [];
+      project.images.push(image);
+      project.updatedAt = now;
+
+      await writeProjects(projects);
+
+      res.status(201).json({
+        image
+      });
+
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error: error.message
+      });
+    }
+  }
+);
+
 
 router.post(
   "/api/projects/:id/generate",

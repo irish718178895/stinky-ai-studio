@@ -271,6 +271,10 @@ async function generateAllSceneVoices() {
   setBusy(generateAllVoicesButton, true, "Generating narration…");
   voiceMessage.textContent = `Generating ${eligible.length} narration track(s)…`;
   try {
+    button.disabled = true;
+    button.textContent = "Generating…";
+    status.textContent = "🎬 Wan 2.2 is generating video… this usually takes about 1–2 minutes.";
+
     const result = await jsonFetch(`/api/projects/${project.id}/generate-scene-voices`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -488,17 +492,204 @@ function renderWorkspace() {
     seed.textContent = `Seed ${image.seed}`;
     meta.append(seed);
 
+    const videoStatus = document.createElement("div");
+    videoStatus.className = "video-generation-status";
+
     const buttons = document.createElement("div");
     buttons.className = "card-buttons";
+
+    const videoButton = createCardButton(
+      "Generate Video",
+      "text-button",
+      () => generateWanVideoFromImage(image, videoButton, videoStatus)
+    );
+
     buttons.append(
       createCardButton("Use", "text-button", () => useImageSettings(image)),
       createCardButton("Regenerate", "text-button", () => regenerateImage(image, false)),
+      videoButton,
       createCardButton("Delete", "text-button danger-text", () => deleteImage(image))
     );
-    body.append(prompt, meta, buttons);
+
+    body.append(prompt, meta, videoStatus, buttons);
     card.append(img, body);
     gallery.append(card);
   }
+}
+
+const WAN_DEFAULT_MOTION_PROMPT =
+  "Natural realistic motion. The subject makes a small controlled head movement, " +
+  "blinks naturally, and subtly shifts their body while maintaining the original pose. " +
+  "Preserve the face, eyes, clothing, anatomy, body proportions, and background. " +
+  "Smooth controlled movement. The camera remains stationary.";
+
+function openWanVideoGenerator(image, cardButton = null, cardStatus = null) {
+  const dialog = byId("wanVideoDialog");
+
+  state.wanVideoImage = image;
+  state.wanVideoCardButton = cardButton;
+  state.wanVideoCardStatus = cardStatus;
+
+  byId("wanVideoSourceImage").src = image.url;
+  byId("wanVideoPrompt").value = WAN_DEFAULT_MOTION_PROMPT;
+
+  const status = byId("wanVideoDialogStatus");
+  status.textContent = "";
+
+  const generateButton = byId("generateWanVideoButton");
+  generateButton.disabled = false;
+  generateButton.textContent = "Generate Video";
+
+  const result = byId("wanVideoResult");
+  result.hidden = true;
+
+  const player = byId("wanVideoPlayer");
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+
+  const link = byId("wanVideoOpenLink");
+  link.removeAttribute("href");
+
+  dialog.showModal();
+
+  setTimeout(() => byId("wanVideoPrompt").focus(), 0);
+}
+
+async function generateWanVideoFromDialog() {
+  const project = currentProject();
+  const image = state.wanVideoImage;
+
+  if (!project || !image) return;
+
+  const prompt = byId("wanVideoPrompt").value.trim();
+
+  if (!prompt) {
+    byId("wanVideoDialogStatus").textContent =
+      "Enter a motion prompt before generating.";
+    return;
+  }
+
+  const generateButton = byId("generateWanVideoButton");
+  const cancelButton = byId("cancelWanVideoButton");
+  const status = byId("wanVideoDialogStatus");
+
+  const cardButton = state.wanVideoCardButton;
+  const cardStatus = state.wanVideoCardStatus;
+
+  try {
+    generateButton.disabled = true;
+    generateButton.textContent = "Generating…";
+    cancelButton.disabled = true;
+
+    status.textContent =
+      "🎬 Wan 2.2 is generating your video… usually about 1–2 minutes.";
+
+    if (cardButton) {
+      cardButton.disabled = true;
+      cardButton.textContent = "Generating…";
+    }
+
+    if (cardStatus) {
+      cardStatus.textContent =
+        "🎬 Wan 2.2 is generating video…";
+    }
+
+    const result = await jsonFetch(
+      `/api/projects/${project.id}/images/${image.id}/generate-wan-video`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ prompt })
+      }
+    );
+
+    const video = result.video;
+
+    if (!video?.url) {
+      throw new Error(
+        "Generation completed but the server returned no video URL."
+      );
+    }
+
+    const absoluteUrl =
+      `${window.location.origin}${video.url}`;
+
+    generateButton.disabled = false;
+    generateButton.textContent = "Complete ✓";
+    cancelButton.disabled = false;
+    cancelButton.textContent = "Close";
+
+    status.textContent =
+      `✅ Video complete · ${video.fps || 48} FPS · ` +
+      `${Number(video.duration || 0).toFixed(2)} seconds`;
+
+    const resultPanel = byId("wanVideoResult");
+    const player = byId("wanVideoPlayer");
+    const link = byId("wanVideoOpenLink");
+
+    player.src = absoluteUrl;
+    link.href = absoluteUrl;
+
+    resultPanel.hidden = false;
+    player.load();
+
+    if (cardButton) {
+      cardButton.disabled = false;
+      cardButton.textContent = "Complete ✓";
+    }
+
+    if (cardStatus) {
+      cardStatus.innerHTML = "";
+
+      const done = document.createElement("div");
+      done.textContent = "✅ Video complete";
+
+      const cardLink = document.createElement("a");
+      cardLink.href = absoluteUrl;
+      cardLink.target = "_blank";
+      cardLink.rel = "noopener noreferrer";
+      cardLink.textContent = "Open video";
+      cardLink.style.display = "inline-block";
+      cardLink.style.marginTop = "0.35rem";
+
+      cardStatus.append(done, cardLink);
+    }
+
+    project.videos = project.videos || [];
+
+    if (!project.videos.some(item => item.id === video.id)) {
+      project.videos.push(video);
+    }
+
+    renderVideos(project);
+
+  } catch (error) {
+    console.error(error);
+
+    generateButton.disabled = false;
+    generateButton.textContent = "Generate Video";
+    cancelButton.disabled = false;
+
+    status.textContent =
+      `❌ Video generation failed: ${error.message}`;
+
+    if (cardButton) {
+      cardButton.disabled = false;
+      cardButton.textContent = "Generate Video";
+    }
+
+    if (cardStatus) {
+      cardStatus.textContent =
+        `❌ Video generation failed: ${error.message}`;
+    }
+  }
+}
+
+function generateWanVideoFromImage(image, button, status) {
+  openWanVideoGenerator(image, button, status);
 }
 
 async function loadProjects(preferredId = null) {
@@ -960,6 +1151,80 @@ function generationPayload() {
   return payload;
 }
 
+
+async function uploadProjectImage(file) {
+  const project = currentProject();
+
+  if (!project || !file) return;
+
+  const allowed = [
+    "image/png",
+    "image/jpeg",
+    "image/webp"
+  ];
+
+  if (!allowed.includes(file.type)) {
+    message.textContent =
+      "Upload a PNG, JPG, or WebP image.";
+    return;
+  }
+
+  if (file.size > 25 * 1024 * 1024) {
+    message.textContent =
+      "Image is larger than the 25 MB upload limit.";
+    return;
+  }
+
+  const uploadButton = byId("uploadImageButton");
+
+  try {
+    uploadButton.disabled = true;
+    uploadButton.textContent = "Uploading…";
+    message.textContent = `Uploading ${file.name}…`;
+
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = () => resolve(reader.result);
+
+      reader.onerror = () =>
+        reject(new Error("Could not read the selected image."));
+
+      reader.readAsDataURL(file);
+    });
+
+    const result = await jsonFetch(
+      `/api/projects/${project.id}/images/upload`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          filename: file.name,
+          dataUrl
+        })
+      }
+    );
+
+    message.textContent =
+      `✅ Uploaded ${result.image?.originalName || file.name}`;
+
+    await loadProjects(project.id);
+
+  } catch (error) {
+    console.error(error);
+
+    message.textContent =
+      `❌ Upload failed: ${error.message}`;
+
+  } finally {
+    uploadButton.disabled = false;
+    uploadButton.textContent = "📁 Upload Image";
+    byId("uploadImageInput").value = "";
+  }
+}
+
 async function generateImage(event) {
   event.preventDefault();
   const project = currentProject();
@@ -1152,6 +1417,15 @@ byId("regenerateRandomButton").addEventListener("click", () => state.dialogImage
 byId("deleteDialogImageButton").addEventListener("click", () => state.dialogImage && deleteImage(state.dialogImage));
 projectForm.addEventListener("submit", saveProject);
 sceneForm.addEventListener("submit", saveScene);
+byId("uploadImageButton").addEventListener("click", () => {
+  byId("uploadImageInput").click();
+});
+
+byId("uploadImageInput").addEventListener("change", event => {
+  const file = event.target.files?.[0];
+  if (file) uploadProjectImage(file);
+});
+
 form.addEventListener("submit", generateImage);
 storyboardForm.addEventListener("submit", generateStoryboard);
 byId("loadFirstPromptButton").addEventListener("click", () => {
@@ -1169,3 +1443,31 @@ await Promise.all([
 
 initStudioNavigation();
 initScriptWorkspace();
+
+
+// ------------------------------------------------------------
+// Wan Video Generator
+// ------------------------------------------------------------
+
+byId("generateWanVideoButton").addEventListener(
+  "click",
+  generateWanVideoFromDialog
+);
+
+byId("cancelWanVideoButton").addEventListener(
+  "click",
+  () => {
+    if (!byId("generateWanVideoButton").disabled) {
+      byId("wanVideoDialog").close();
+    }
+  }
+);
+
+byId("closeWanVideoDialog").addEventListener(
+  "click",
+  () => {
+    if (!byId("generateWanVideoButton").disabled) {
+      byId("wanVideoDialog").close();
+    }
+  }
+);

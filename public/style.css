@@ -469,3 +469,151 @@ select:focus { outline: 2px solid #c97b2b; border-color: transparent; }
     min-height: 340px;
   }
 }
+
+.video-generation-status {
+  min-height: 1.35rem;
+  margin-top: 0.45rem;
+  font-size: 0.82rem;
+  opacity: 0.9;
+}
+
+.image-card button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+
+/* ============================================================
+   Stinky Video Generator
+   ============================================================ */
+
+.wan-video-dialog {
+  width: min(1100px, calc(100vw - 40px));
+  max-height: 94vh;
+  padding: 24px;
+  overflow: auto;
+}
+
+.wan-video-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, .9fr) minmax(360px, 1.1fr);
+  gap: 28px;
+  align-items: start;
+}
+
+.wan-video-source {
+  min-width: 0;
+}
+
+.wan-video-source img {
+  display: block;
+  width: 100%;
+  max-height: 560px;
+  object-fit: contain;
+  background: #11100d;
+  border: 1px solid #4a3f33;
+  border-radius: 12px;
+}
+
+.wan-video-eyebrow {
+  margin-bottom: 9px;
+  color: #d18a3a;
+  font-size: .72rem;
+  font-weight: 900;
+  letter-spacing: .14em;
+}
+
+.wan-video-controls h3 {
+  margin: 0 0 8px;
+  font-size: 2rem;
+}
+
+.wan-video-controls label {
+  display: block;
+  margin: 22px 0 8px;
+  font-size: .82rem;
+  font-weight: 850;
+  letter-spacing: .04em;
+}
+
+#wanVideoPrompt {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 190px;
+  resize: vertical;
+  border: 1px solid #5c5041;
+  border-radius: 9px;
+  background: #11100d;
+  color: #fff7e9;
+  padding: 13px 14px;
+  font: inherit;
+  line-height: 1.5;
+}
+
+#wanVideoPrompt:focus {
+  outline: 2px solid #c97b2b;
+  border-color: transparent;
+}
+
+.wan-video-specs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.wan-video-specs span {
+  padding: 5px 8px;
+  border: 1px solid #4a4035;
+  border-radius: 999px;
+  background: #191611;
+  color: #a99b89;
+  font-size: .72rem;
+}
+
+.wan-video-dialog-status {
+  min-height: 1.5rem;
+  margin: 18px 0 5px;
+  color: #d8c9b5;
+  line-height: 1.45;
+}
+
+.wan-video-actions {
+  margin-top: 15px;
+}
+
+.wan-video-result {
+  margin-top: 28px;
+  padding-top: 22px;
+  border-top: 1px solid #4a3f33;
+}
+
+.wan-video-result video {
+  display: block;
+  width: min(100%, 900px);
+  max-height: 650px;
+  margin: 0 auto;
+  border-radius: 12px;
+  background: #000;
+}
+
+.wan-video-result-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.wan-video-open-link {
+  display: inline-block;
+  text-decoration: none;
+}
+
+@media (max-width: 800px) {
+  .wan-video-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .wan-video-source img {
+    max-height: 360px;
+  }
+}

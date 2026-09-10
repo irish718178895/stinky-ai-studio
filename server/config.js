@@ -17,6 +17,21 @@ export const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 export const PIPER_COMMAND = process.env.PIPER_COMMAND || path.join(ROOT_DIR, ".venv-piper", "bin", "piper");
 export const PIPER_VOICES_DIR = process.env.PIPER_VOICES_DIR || path.join(ROOT_DIR, "voices");
 export const PIPER_MODEL = process.env.PIPER_MODEL || path.join(PIPER_VOICES_DIR, "en_US-lessac-medium.onnx");
+
+export const ECHOMIMIC_DIR =
+  process.env.ECHOMIMIC_DIR ||
+  path.join(process.env.HOME || "", "echomimic_v3");
+
+export const ECHOMIMIC_PYTHON =
+  process.env.ECHOMIMIC_PYTHON ||
+  path.join(
+    process.env.HOME || "",
+    "miniconda3",
+    "envs",
+    "EchoMimic",
+    "bin",
+    "python"
+  );
 export const RESOLUTIONS = {
   "720p": { width: 1280, height: 720 },
   "1080p": { width: 1920, height: 1080 }

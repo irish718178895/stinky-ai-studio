@@ -103,7 +103,7 @@ export async function comfyFetch(route, options = {}) {
 
 async function waitForResult(
   promptId,
-  timeoutMs = 10 * 60 * 1000
+  timeoutMs = 20 * 60 * 1000
 ) {
   const started = Date.now();
 
@@ -236,11 +236,11 @@ export async function generateForProject(
   }
 
   const width = Math.round(
-    normalizeNumber(settings.width, 512, 256, 768)
+    normalizeNumber(settings.width, 768, 256, 1024)
   );
 
   const height = Math.round(
-    normalizeNumber(settings.height, 512, 256, 768)
+    normalizeNumber(settings.height, 768, 256, 1024)
   );
 
   const steps = Math.round(

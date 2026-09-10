@@ -11,6 +11,7 @@ import storyboardRoutes from "./routes/storyboard.js";
 import projectRoutes from "./routes/projects.js";
 import imageRoutes from "./routes/images.js";
 import renderRoutes from "./routes/render.js";
+import wanVideoRoutes from "./routes/wan-video.js";
 import providerRoutes from "./routes/providers.js";
 
 const app = express();
@@ -26,10 +27,11 @@ app.use(storyboardRoutes);
 app.use(projectRoutes);
 app.use(imageRoutes);
 app.use(renderRoutes);
+app.use(wanVideoRoutes);
 app.use(providerRoutes);
 
 await ensureStorage();
-app.listen(PORT, "127.0.0.1", () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`Stinky AI Studio v0.11.4: http://127.0.0.1:${PORT}`);
   console.log(`ComfyUI API: ${COMFY_URL}`);
   console.log(`Checkpoint: ${CHECKPOINT}`);
