@@ -17,3 +17,7 @@ output/
 .venv-piper/
 voices/*.onnx
 voices/*.onnx.json
+
+# Local development backups
+backups/
+*.before-*
