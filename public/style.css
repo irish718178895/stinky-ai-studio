@@ -617,3 +617,19 @@ select:focus { outline: 2px solid #c97b2b; border-color: transparent; }
     max-height: 360px;
   }
 }
+
+
+.wan-video-duration {
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 8px;
+  font: inherit;
+}
+
+.wan-video-duration-hint {
+  margin-top: 0.4rem;
+  margin-bottom: 0.8rem;
+  font-size: 0.82rem;
+  opacity: 0.75;
+}

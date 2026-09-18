@@ -1,4 +1,4 @@
-import { jsonFetch } from "./js/api.js";
+import { jsonFetch, appUrl } from "./js/api.js";
 import { state, currentProject, currentScene, selectedSceneImage } from "./js/state.js";
 import { byId, elements } from "./js/dom.js";
 import { setBusy, cameraMovementLabel } from "./js/ui.js";
@@ -81,7 +81,7 @@ function renderScenes(project) {
     preview.className = "scene-preview";
     if (selectedImage) {
       const image = document.createElement("img");
-      image.src = selectedImage.url;
+      image.src = appUrl(selectedImage.url);
       image.alt = `Selected image for ${scene.title}`;
       image.addEventListener("click", () => openImage(selectedImage));
       preview.append(image);
@@ -135,13 +135,13 @@ function renderVideos(project) {
   }
   for (const video of videos) {
     const card=document.createElement("article"); card.className="video-card";
-    const player=document.createElement("video"); player.src=video.url; player.controls=true; player.preload="metadata";
+    const player=document.createElement("video"); player.src=appUrl(video.url); player.controls=true; player.preload="metadata";
     const info=document.createElement("div"); info.className="card-body";
     const title=document.createElement("strong"); title.textContent=video.filename;
     const meta=document.createElement("p"); meta.className="card-meta"; const mb = video.fileSize ? `${(video.fileSize / 1024 / 1024).toFixed(1)} MB` : "";
     meta.textContent = `${video.duration}s · ${video.sceneCount} scenes · ${video.width}×${video.height} · ${video.fps || 30} fps${video.transition ? ` · ${video.transition}` : ""}${video.encoder ? ` · ${video.encoder}` : ""}${video.narration ? " · narration" : ""}${video.music ? ` · music: ${video.music.name}` : ""}${mb ? ` · ${mb}` : ""}`;
     const actions=document.createElement("div"); actions.className="card-buttons";
-    const download=document.createElement("a"); download.href=video.url; download.download=video.filename; download.className="text-button link-button"; download.textContent="Download";
+    const download=document.createElement("a"); download.href=appUrl(video.url); download.download=video.filename; download.className="text-button link-button"; download.textContent="Download";
     const del=createCardButton("Delete","text-button danger-text",()=>deleteVideo(video));
     actions.append(download,del); info.append(title,meta,actions); card.append(player,info); videoList.append(card);
   }
@@ -329,7 +329,7 @@ function renderMusicTracks(project) {
     const audio = document.createElement("audio");
     audio.controls = true;
     audio.preload = "metadata";
-    audio.src = track.url;
+    audio.src = appUrl(track.url);
     const details = document.createElement("div");
     details.className = "music-track-details";
     const name = document.createElement("strong");
@@ -478,7 +478,7 @@ function renderWorkspace() {
     const card = document.createElement("article");
     card.className = "image-card";
     const img = document.createElement("img");
-    img.src = image.url;
+    img.src = appUrl(image.url);
     img.alt = "Generated image";
     img.addEventListener("click", () => openImage(image));
 
@@ -530,8 +530,10 @@ function openWanVideoGenerator(image, cardButton = null, cardStatus = null) {
   state.wanVideoCardButton = cardButton;
   state.wanVideoCardStatus = cardStatus;
 
-  byId("wanVideoSourceImage").src = image.url;
+  byId("wanVideoSourceImage").src = appUrl(image.url);
   byId("wanVideoPrompt").value = WAN_DEFAULT_MOTION_PROMPT;
+  byId("wanVideoDuration").value = "2";
+  updateWanVideoDurationHint();
 
   const status = byId("wanVideoDialogStatus");
   status.textContent = "";
@@ -556,6 +558,23 @@ function openWanVideoGenerator(image, cardButton = null, cardStatus = null) {
   setTimeout(() => byId("wanVideoPrompt").focus(), 0);
 }
 
+function updateWanVideoDurationHint() {
+  const duration = Number(byId("wanVideoDuration")?.value || 2);
+  const hint = byId("wanVideoDurationHint");
+
+  if (!hint) return;
+
+  if (duration <= 2) {
+    hint.textContent = "Single Wan generation · fastest";
+    return;
+  }
+
+  const segments = Math.ceil(duration / (97 / 48));
+
+  hint.textContent =
+    `Long-form mode · about ${segments} Wan segments will be chained`;
+}
+
 async function generateWanVideoFromDialog() {
   const project = currentProject();
   const image = state.wanVideoImage;
@@ -563,6 +582,7 @@ async function generateWanVideoFromDialog() {
   if (!project || !image) return;
 
   const prompt = byId("wanVideoPrompt").value.trim();
+  const duration = Number(byId("wanVideoDuration").value || 2);
 
   if (!prompt) {
     byId("wanVideoDialogStatus").textContent =
@@ -602,7 +622,10 @@ async function generateWanVideoFromDialog() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ prompt })
+        body: JSON.stringify({
+          prompt,
+          duration
+        })
       }
     );
 
@@ -615,7 +638,7 @@ async function generateWanVideoFromDialog() {
     }
 
     const absoluteUrl =
-      `${window.location.origin}${video.url}`;
+      `${window.location.origin}${appUrl(video.url)}`;
 
     generateButton.disabled = false;
     generateButton.textContent = "Complete ✓";
@@ -687,6 +710,11 @@ async function generateWanVideoFromDialog() {
     }
   }
 }
+
+byId("wanVideoDuration").addEventListener(
+  "change",
+  updateWanVideoDurationHint
+);
 
 function generateWanVideoFromImage(image, button, status) {
   openWanVideoGenerator(image, button, status);
@@ -1282,7 +1310,7 @@ async function regenerateImage(image, randomSeed) {
 
 function openImage(image) {
   state.dialogImage = image;
-  byId("largeImage").src = image.url;
+  byId("largeImage").src = appUrl(image.url);
   byId("imageMetadata").textContent =
 `Prompt: ${image.prompt}
 

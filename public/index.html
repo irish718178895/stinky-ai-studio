@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Stinky AI Studio v0.9</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <div class="app-shell">
@@ -463,6 +463,23 @@
           placeholder="Describe the motion for this shot..."
         ></textarea>
 
+        <label for="wanVideoDuration">
+          Duration
+        </label>
+
+        <select id="wanVideoDuration" class="wan-video-duration">
+          <option value="2" selected>2 seconds</option>
+          <option value="5">5 seconds</option>
+          <option value="10">10 seconds</option>
+          <option value="30">30 seconds</option>
+          <option value="60">60 seconds</option>
+        </select>
+
+        <div id="wanVideoDurationHint"
+             class="wan-video-duration-hint">
+          Single Wan generation · fastest
+        </div>
+
         <div class="wan-video-specs">
           <span>Wan 2.2 TI2V 5B</span>
           <span>640 × 480</span>
@@ -510,6 +527,6 @@
     </div>
   </dialog>
 
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>
